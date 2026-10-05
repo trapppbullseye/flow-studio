@@ -1,3 +1,5 @@
+import { GENERATED_CHALLENGES } from "./challenges.generated";
+
 export type NodeKind =
   // entry
   | "client"
@@ -1435,9 +1437,13 @@ export interface Challenge {
   nodes: FlowNode[];
   edges: Edge[];
   requireNoSpof: boolean;
+  /** "empty" = build from nothing on a blank canvas; "broken" = repair this design */
+  start?: "empty" | "broken";
+  /** true when produced by scripts/make_challenge.py */
+  generated?: boolean;
 }
 
-export const CHALLENGES: Challenge[] = [
+const BUILT_IN_CHALLENGES: Challenge[] = [
   {
     id: "melt",
     title: "FIX THE MELT",
@@ -1447,6 +1453,7 @@ export const CHALLENGES: Challenge[] = [
     nodes: SCENARIOS[0].nodes,
     edges: SCENARIOS[0].edges,
     requireNoSpof: false,
+    start: "broken",
   },
   {
     id: "harden",
@@ -1457,6 +1464,7 @@ export const CHALLENGES: Challenge[] = [
     nodes: SCENARIOS[2].nodes,
     edges: SCENARIOS[2].edges,
     requireNoSpof: true,
+    start: "broken",
   },
   {
     id: "ai",
@@ -1467,8 +1475,25 @@ export const CHALLENGES: Challenge[] = [
     nodes: SCENARIOS[5].nodes,
     edges: SCENARIOS[5].edges,
     requireNoSpof: false,
+    start: "broken",
   },
 ];
+
+/** built-in puzzles first, then everything the generator produced */
+export const CHALLENGES: Challenge[] = [
+  ...BUILT_IN_CHALLENGES,
+  ...GENERATED_CHALLENGES,
+];
+
+/** blank-canvas "build it from nothing" jobs */
+export const BUILD_CHALLENGES: Challenge[] = CHALLENGES.filter(
+  (c) => c.start === "empty",
+);
+
+/** designs that already exist and are melting */
+export const REPAIR_CHALLENGES: Challenge[] = CHALLENGES.filter(
+  (c) => c.start !== "empty",
+);
 
 /* ============================================================
    SCALE PRESETS — the same design at four real-world sizes

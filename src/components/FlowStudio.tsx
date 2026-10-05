@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BUILD_CHALLENGES,
   CATALOG,
   CHALLENGES,
   SCALE_PRESETS,
@@ -40,6 +41,7 @@ import {
 } from "@/lib/share";
 import NodeCard, { NODE_H, NODE_W, type View } from "./NodeCard";
 import Inspector, { Palette } from "./Inspector";
+import ModeScreen, { type Mode } from "./ModeScreen";
 
 const EDGE_COLOR: Record<Edge["mode"], string> = {
   read: "var(--edge-read)",
@@ -84,15 +86,17 @@ const TOUR: { title: string; body: string }[] = [
 ];
 
 export default function FlowStudio() {
-  const [scenarioId, setScenarioId] = useState(SCENARIOS[0].id);
-  const [nodes, setNodes] = useState<FlowNode[]>(SCENARIOS[0].nodes);
-  const [edges, setEdges] = useState<Edge[]>(SCENARIOS[0].edges);
-  const [users, setUsers] = useState(SCENARIOS[0].users);
+  const [mode, setMode] = useState<Mode | null>(null);
+  const [booted, setBooted] = useState(false);
+  const [scenarioId, setScenarioId] = useState("");
+  const [nodes, setNodes] = useState<FlowNode[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
+  const [users, setUsers] = useState(500000);
   const [selection, setSelection] = useState<string[]>([]);
   const [meta, setMeta] = useState({
-    index: SCENARIOS[0].index,
-    title: SCENARIOS[0].title,
-    blurb: SCENARIOS[0].blurb,
+    index: "🧪",
+    title: "START",
+    blurb: "Choose how you want to start.",
   });
   const [view, setView] = useState<View>("info");
   const [dead, setDead] = useState<string[]>([]);
@@ -220,28 +224,31 @@ export default function FlowStudio() {
     setShowChart(true);
   }, []);
 
-  /* ---------- boot: shared link or default scenario ---------- */
+  /* ---------- boot: a shared link skips the mode screen ---------- */
   useEffect(() => {
     const shared = readSharedDesign();
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (shared) {
-      // reading the URL is an external-system sync; setState on mount is correct here
-      /* eslint-disable react-hooks/set-state-in-effect */
       setNodes(shared.nodes);
       setEdges(shared.edges);
       setUsers(shared.users);
       setDead(shared.dead);
+      setMode("shared");
       setScenarioId("");
       setMeta({
         index: "🔗",
         title: "SHARED DESIGN",
         blurb: "A build someone sent you. Poke at it — nothing here is saved.",
       });
+      setSaved(listSaved());
+      setBooted(true);
       /* eslint-enable react-hooks/set-state-in-effect */
-      fitTo(shared.nodes);
+      window.setTimeout(() => fitTo(shared.nodes), 60);
       flash("shared design loaded");
       return;
     }
-    fitTo(SCENARIOS[0].nodes);
+    setSaved(listSaved());
+    setBooted(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -280,6 +287,74 @@ export default function FlowStudio() {
     [fitTo],
   );
 
+  /** pick a fresh blank-canvas "zero → hero" target */
+  const rerollZero = useCallback(() => {
+    const pool = BUILD_CHALLENGES;
+    if (!pool.length) {
+      flash("no build targets — run scripts/make_challenge.py");
+      return;
+    }
+    const c = pool[Math.floor(Math.random() * pool.length)];
+    setChallenge(c);
+    setScenarioId("");
+    setMeta({ index: "🪙", title: c.title, blurb: c.brief });
+    setNodes([]);
+    setEdges([]);
+    setUsers(c.users);
+    setSelection([]);
+    setDead([]);
+    setZoom(0.9);
+    setPan({ x: 30, y: 20 });
+    flash(`target: ${c.users.toLocaleString()} users · ${fmtMoney(c.budget)}/mo`);
+  }, [flash]);
+
+  const chooseMode = useCallback(
+    (m: Mode) => {
+      setMode(m);
+      setSelection([]);
+      setLinkFrom(null);
+      setWireFrom(null);
+      setLinkMode(false);
+      setDead([]);
+      setHistory([]);
+      setSavedName("");
+
+      if (m === "sandbox") {
+        setNodes([]);
+        setEdges([]);
+        setChallenge(null);
+        setScenarioId("");
+        setUsers(500000);
+        setZoom(0.9);
+        setPan({ x: 30, y: 20 });
+        setMeta({
+          index: "🧪",
+          title: "SANDBOX",
+          blurb:
+            "Empty canvas — no budget, no rules. Add components below, then drag a ● port onto another node to wire them up.",
+        });
+      } else if (m === "zero") {
+        rerollZero();
+      } else if (m === "scenarios") {
+        loadScenario(SCENARIOS[0].id);
+      } else if (m === "challenges") {
+        loadChallenge(CHALLENGES[0]);
+      }
+
+      try {
+        if (!window.localStorage.getItem("flowstudio.toured")) setTourStep(0);
+      } catch {
+        /* ignore */
+      }
+    },
+    [rerollZero, loadScenario, loadChallenge],
+  );
+
+  const changeMode = useCallback(() => {
+    setMode(null);
+    setTourStep(null);
+  }, []);
+
   const buildSmartStack = useCallback(() => {
     const { nodes: ns, edges: es } = smartStack(users);
     setScenarioId("");
@@ -291,7 +366,6 @@ export default function FlowStudio() {
     });
     setNodes(ns);
     setEdges(es);
-    setChallenge(null);
     setDead([]);
     setSelection([]);
     setWireFrom(null);
@@ -864,10 +938,9 @@ export default function FlowStudio() {
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, selection]);
 
-  /* ---------------- first-run tour + saved library ---------------- */
+  /* ---------------- first-run tour ---------------- */
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
-    setSaved(listSaved());
     try {
       if (!window.localStorage.getItem("flowstudio.toured")) setTourStep(0);
     } catch {
@@ -907,19 +980,53 @@ export default function FlowStudio() {
 
   const grade = challenge
     ? (() => {
+        // "serves the load" — a source must actually reach something downstream,
+        // otherwise an empty canvas would trivially "hold"
+        const hasSource = nodes.some((n) => CATALOG[n.kind].source);
+        const hasSink = Object.values(sim.nodes).some(
+          (sn) => !sn.entry.source && sn.inflow > 0.5,
+        );
+        const serves = hasSource && hasSink;
         const holds = !sim.worst;
         const underBudget = bill.total <= challenge.budget;
         const noSpof = spofs.size === 0;
         return {
+          serves,
           holds,
           underBudget,
           noSpof,
-          pass: holds && underBudget && (!challenge.requireNoSpof || noSpof),
+          pass:
+            serves &&
+            holds &&
+            underBudget &&
+            (!challenge.requireNoSpof || noSpof),
         };
       })()
     : null;
 
   const slowest = lat.slowestId ? nodes.find((n) => n.id === lat.slowestId) : null;
+
+  // ── before the studio: splash, then the mode picker ──
+  if (!booted) {
+    return (
+      <div className="grid min-h-screen w-full place-items-center">
+        <span className="mono text-[11px] text-[var(--color-muted)]">
+          loading flow studio…
+        </span>
+      </div>
+    );
+  }
+
+  if (mode === null) {
+    return (
+      <ModeScreen
+        onChoose={chooseMode}
+        scenarioCount={SCENARIOS.length}
+        challengeCount={CHALLENGES.length}
+        buildCount={BUILD_CHALLENGES.length}
+      />
+    );
+  }
 
   return (
     <div className="relative flex h-screen w-full flex-col overflow-hidden">
@@ -953,7 +1060,22 @@ export default function FlowStudio() {
             </div>
             <Readout label="req/s" value={fmt(sim.rps)} tone="accent" />
             <Readout label="p99" value={fmtMs(lat.endToEnd)} tone="accent" />
-            <Readout label="$/mo" value={fmtMoney(bill.total)} tone="good" />
+            {challenge ? (
+              <Readout
+                label="spent"
+                value={`${fmtMoney(bill.total)} / ${fmtMoney(challenge.budget)}`}
+                tone={bill.total <= challenge.budget ? "good" : "bad"}
+              />
+            ) : (
+              <Readout label="$/mo" value={fmtMoney(bill.total)} tone="good" />
+            )}
+            <button
+              onClick={changeMode}
+              title="back to the mode picker"
+              className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5 text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              ⇤ modes
+            </button>
             <button
               onClick={() => setTourStep(0)}
               title="how this works"
@@ -1086,18 +1208,44 @@ export default function FlowStudio() {
           </div>
 
           {challenge && grade && (
-            <Section title="challenge">
+            <Section title={challenge.start === "empty" ? "🪙 zero → hero" : "⚔ challenge"}>
               <div className="panel rounded-xl p-3">
-                <div className="mono mb-2 text-[9px] uppercase tracking-widest text-[var(--color-muted)]">
-                  budget {fmtMoney(challenge.budget)}/mo
+                <div className="mb-2 flex items-baseline justify-between">
+                  <span className="mono text-[9px] uppercase tracking-widest text-[var(--color-muted)]">
+                    spent / budget
+                  </span>
+                  <span
+                    className="mono text-[11px] font-bold"
+                    style={{
+                      color: grade.underBudget
+                        ? "var(--color-good)"
+                        : "var(--color-bad)",
+                    }}
+                  >
+                    {fmtMoney(bill.total)} / {fmtMoney(challenge.budget)}
+                  </span>
                 </div>
+                <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-well)]">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${Math.min(100, challenge.budget ? (bill.total / challenge.budget) * 100 : 0)}%`,
+                      background: grade.underBudget
+                        ? "var(--color-good)"
+                        : "var(--color-bad)",
+                    }}
+                  />
+                </div>
+
                 <div className="mono flex flex-col gap-1 text-[10px]">
-                  <Grade ok={grade.holds} label="system holds under load" />
+                  <Grade ok={grade.serves} label="serves the target load" />
+                  <Grade ok={grade.holds} label="every component holds" />
                   <Grade ok={grade.underBudget} label="within budget" />
                   {challenge.requireNoSpof && (
                     <Grade ok={grade.noSpof} label="no single point of failure" />
                   )}
                 </div>
+
                 <div
                   className={`mono mt-2.5 rounded-lg px-2.5 py-2 text-center text-[11px] font-bold ${
                     grade.pass
@@ -1107,9 +1255,18 @@ export default function FlowStudio() {
                 >
                   {grade.pass ? "✓ PASSED" : "not yet"}
                 </div>
+
+                {challenge.start === "empty" && (
+                  <button
+                    onClick={rerollZero}
+                    className="mono mt-2 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] py-1.5 text-[10px] text-[var(--color-muted)] transition hover:text-[var(--color-ink)]"
+                  >
+                    ↻ different target
+                  </button>
+                )}
                 <button
                   onClick={() => setChallenge(null)}
-                  className="mono mt-2 w-full text-[9px] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  className="mono mt-1.5 w-full text-[9px] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
                 >
                   exit challenge
                 </button>

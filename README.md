@@ -7,6 +7,40 @@ them together, crank the user count, and watch traffic propagate through the
 graph. Whatever runs past its capacity lights up red as the bottleneck — then
 find out what it costs, how slow it is, and whether it survives losing a node.
 
+## Start here — pick a mode
+
+The app opens on a mode picker rather than dropping you into a canvas:
+
+| Mode | What it is |
+| --- | --- |
+| **🪙 Zero → Hero** | **Start with nothing.** Blank canvas, **$0 spent**. You're given a traffic target and a monthly budget, and you build the entire system from scratch — wiring, sizing and all — while watching the bill climb from zero. Pass by serving the load, holding under it, and staying inside budget. `↻ different target` rerolls. |
+| **🧪 Sandbox** | **Everything unlocked.** Empty canvas, no budget, no rules. All 51 components plus chaos, replay, cost, latency and the IaC exports. For testing anything you like. |
+| **📚 Scenarios** | The six guided builds that teach the fundamentals. |
+| **⚔ Challenges** | Scored puzzles — repair a melting design or build from scratch, with a budget and a goal. |
+
+A `⇤ modes` button in the header takes you back to the picker at any time.
+
+## Generating challenges
+
+`scripts/make_challenge.py` writes the challenge set the app loads:
+
+```bash
+npm run make:challenges                       # 8 challenges
+npm run make:challenges -- --count 20 --seed 7
+python3 scripts/make_challenge.py --stdout    # print instead of writing
+```
+
+It emits `src/lib/challenges.generated.ts`, which `design.ts` imports and
+appends to the built-in puzzles. Two flavours are produced:
+
+- **`empty`** — "from nothing" targets: blank canvas + a user count + a budget
+- **`broken`** — a minimal design that melts, for you to repair
+
+Budgets are computed by pricing a reference stack with the *same* cost model the
+app uses (mirrored in Python), then adding a small margin — so every generated
+challenge is genuinely solvable, but tight enough to be a puzzle. Options:
+`--count`, `--seed`, `--empty-ratio`, `--out`, `--stdout`.
+
 ## What it does
 
 - **Drag-and-drop canvas** — pan, zoom, drag nodes.

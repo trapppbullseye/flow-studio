@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "make:challenges": "python3 scripts/make_challenge.py"
   },
   "dependencies": {
     "next": "16.3.8",
