@@ -65,6 +65,7 @@ export default function FlowStudio() {
   const [showChart, setShowChart] = useState(false);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [replaying, setReplaying] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const [linkMode, setLinkMode] = useState(false);
@@ -295,6 +296,32 @@ export default function FlowStudio() {
     setDead([]);
     flash("all components back online");
   }, [flash]);
+
+  /** two-step wipe: first click arms it, second click clears the canvas */
+  const clearAll = useCallback(() => {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      window.setTimeout(() => setConfirmClear(false), 5000);
+      flash("click clear again to wipe everything");
+      return;
+    }
+    setConfirmClear(false);
+    setNodes([]);
+    setEdges([]);
+    setDead([]);
+    setSelection([]);
+    setWireFrom(null);
+    setLinkFrom(null);
+    setScenarioId("");
+    setChallenge(null);
+    setMeta({
+      index: "🧹",
+      title: "BLANK CANVAS",
+      blurb:
+        "Empty canvas. Add components from the palette, then drag a ● port onto another node to wire them up.",
+    });
+    flash("canvas cleared");
+  }, [confirmClear, flash]);
 
   const toggleDead = useCallback((id: string) => {
     setDead((d) => (d.includes(id) ? d.filter((x) => x !== id) : [...d, id]));
@@ -744,6 +771,15 @@ export default function FlowStudio() {
           </Btn>
           <Btn onClick={fit} title="zoom to fit">
             fit
+          </Btn>
+
+          <span className="mx-1 h-4 w-px bg-[var(--color-line)]" />
+          <Btn
+            onClick={clearAll}
+            tone={confirmClear ? "bad" : "default"}
+            title="remove every component and link from the canvas"
+          >
+            {confirmClear ? "⚠ click again" : "🧹 clear all"}
           </Btn>
         </div>
       </header>
