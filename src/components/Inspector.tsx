@@ -231,8 +231,13 @@ function Row({ label, value }: { label: string; value: string }) {
 
 export function Palette({
   onAdd,
+  unlocked,
+  lockedHint,
 }: {
   onAdd: (k: NodeKind) => void;
+  /** when provided, anything outside this set renders locked */
+  unlocked?: Set<NodeKind>;
+  lockedHint?: (k: NodeKind) => string | null;
 }) {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
@@ -267,14 +272,29 @@ export function Palette({
           <div className="grid grid-cols-2 gap-1.5">
             {g.kinds.map((k) => {
               const e = CATALOG[k];
+              const locked = unlocked ? !unlocked.has(k) : false;
+              const hint = locked && lockedHint ? lockedHint(k) : null;
               return (
                 <button
                   key={k}
-                  onClick={() => onAdd(k)}
-                  title={`${e.name} — ${e.tagline}`}
-                  className="mono flex items-center gap-1.5 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-left text-[9.5px] transition hover:border-[var(--color-accent)] hover:bg-[var(--color-panel2)]"
+                  onClick={() => !locked && onAdd(k)}
+                  disabled={locked}
+                  title={
+                    locked
+                      ? `${e.name} — locked${hint ? ` · ${hint}` : ""}`
+                      : `${e.name} — ${e.tagline}`
+                  }
+                  className={`mono flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-left text-[9.5px] transition ${
+                    locked
+                      ? "cursor-not-allowed border-dashed border-[var(--color-line)] bg-transparent opacity-40"
+                      : "border-[var(--color-line)] bg-[var(--color-well)] hover:border-[var(--color-accent)] hover:bg-[var(--color-panel2)]"
+                  }`}
                 >
-                  <span style={{ color: e.color }}>{e.glyph}</span>
+                  <span
+                    style={{ color: locked ? "var(--color-muted)" : e.color }}
+                  >
+                    {locked ? "🔒" : e.glyph}
+                  </span>
                   <span className="truncate">{shortName(k)}</span>
                 </button>
               );

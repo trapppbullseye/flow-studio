@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BUILD_CHALLENGES,
   CATALOG,
   CHALLENGES,
   SCALE_PRESETS,
@@ -24,6 +23,23 @@ import {
   type NodeKind,
   type ScalePreset,
 } from "@/lib/design";
+import {
+  BUSINESSES,
+  HERO_STAGES,
+  HERO_START_BUSINESS,
+  HERO_START_CASH,
+  HERO_START_USERS,
+  PIVOT_CHURN,
+  businessById,
+  heroTick,
+  nextStage,
+  pitchAmount,
+  pitchOdds,
+  revenueFor,
+  stageIndexFor,
+  unlockedUpTo,
+  type Business,
+} from "@/lib/hero";
 import { analyzeLatency, findSpofs, fmtMs } from "@/lib/analysis";
 import { explainDesign } from "@/lib/explain";
 import { toDockerCompose, toTerraform } from "@/lib/iac";
@@ -115,6 +131,18 @@ export default function FlowStudio() {
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+
+  /* ---- zero → hero progression ---- */
+  const [hero, setHero] = useState({
+    cash: HERO_START_CASH,
+    month: 0,
+    businessId: HERO_START_BUSINESS,
+    running: false,
+    raises: 0,
+    bankrupt: false,
+  });
+  const [showPivot, setShowPivot] = useState(false);
+  const [pitchMsg, setPitchMsg] = useState<string | null>(null);
 
   const [linkMode, setLinkMode] = useState(false);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
@@ -287,27 +315,6 @@ export default function FlowStudio() {
     [fitTo],
   );
 
-  /** pick a fresh blank-canvas "zero → hero" target */
-  const rerollZero = useCallback(() => {
-    const pool = BUILD_CHALLENGES;
-    if (!pool.length) {
-      flash("no build targets — run scripts/make_challenge.py");
-      return;
-    }
-    const c = pool[Math.floor(Math.random() * pool.length)];
-    setChallenge(c);
-    setScenarioId("");
-    setMeta({ index: "🪙", title: c.title, blurb: c.brief });
-    setNodes([]);
-    setEdges([]);
-    setUsers(c.users);
-    setSelection([]);
-    setDead([]);
-    setZoom(0.9);
-    setPan({ x: 30, y: 20 });
-    flash(`target: ${c.users.toLocaleString()} users · ${fmtMoney(c.budget)}/mo`);
-  }, [flash]);
-
   const chooseMode = useCallback(
     (m: Mode) => {
       setMode(m);
@@ -318,6 +325,8 @@ export default function FlowStudio() {
       setDead([]);
       setHistory([]);
       setSavedName("");
+      setShowPivot(false);
+      setPitchMsg(null);
 
       if (m === "sandbox") {
         setNodes([]);
@@ -333,21 +342,48 @@ export default function FlowStudio() {
           blurb:
             "Empty canvas — no budget, no rules. Add components below, then drag a ● port onto another node to wire them up.",
         });
-      } else if (m === "zero") {
-        rerollZero();
+      } else if (m === "hero") {
+        setHero({
+          cash: HERO_START_CASH,
+          month: 0,
+          businessId: HERO_START_BUSINESS,
+          running: false,
+          raises: 0,
+          bankrupt: false,
+        });
+        setNodes([]);
+        setEdges([]);
+        setChallenge(null);
+        setScenarioId("");
+        setUsers(HERO_START_USERS);
+        setZoom(1);
+        setPan({ x: 60, y: 40 });
+        const st0 = HERO_STAGES[0];
+        setMeta({
+          index: st0.glyph,
+          title: st0.name.toUpperCase(),
+          blurb: st0.blurb,
+        });
+        flash("🌱 25 users, $0 in the bank, no revenue model — go");
       } else if (m === "scenarios") {
         loadScenario(SCENARIOS[0].id);
       } else if (m === "challenges") {
         loadChallenge(CHALLENGES[0]);
       }
 
+      // the tour describes tools that zero → hero deliberately hides
       try {
-        if (!window.localStorage.getItem("flowstudio.toured")) setTourStep(0);
+        if (
+          m !== "hero" &&
+          !window.localStorage.getItem("flowstudio.toured")
+        ) {
+          setTourStep(0);
+        }
       } catch {
         /* ignore */
       }
     },
-    [rerollZero, loadScenario, loadChallenge],
+    [flash, loadScenario, loadChallenge],
   );
 
   const changeMode = useCallback(() => {
@@ -978,6 +1014,171 @@ export default function FlowStudio() {
     previewPath = `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
   }
 
+  /* ---------------- zero → hero economy ---------------- */
+  const heroStage = stageIndexFor(users);
+  const biz = businessById(hero.businessId);
+  const heroServing = (() => {
+    const hasSource = nodes.some((n) => CATALOG[n.kind].source);
+    const hasSink = Object.values(sim.nodes).some(
+      (sn) => !sn.entry.source && sn.inflow > 0.5,
+    );
+    return hasSource && hasSink;
+  })();
+  const heroHealthy = heroServing && !sim.worst;
+  const heroRevenue = heroServing ? revenueFor(users, biz.arpu) : 0;
+  const heroNet = heroRevenue - bill.total;
+  const heroUnlocked = mode === "hero" ? unlockedUpTo(heroStage) : undefined;
+  const heroNext = nextStage(heroStage);
+  const heroOdds = pitchOdds({
+    users,
+    stageIndex: heroStage,
+    net: heroNet,
+    healthy: heroHealthy,
+    raises: hero.raises,
+  });
+
+  /** advance one or more months of the simulation */
+  const rollMonths = (n: number) => {
+      let u = users;
+      let cash = hero.cash;
+      let month = hero.month;
+      let stage = heroStage;
+      let bankrupt = false;
+      let lastChurned = false;
+      let lastGrew = false;
+      const stageMsgs: string[] = [];
+
+      for (let i = 0; i < n; i++) {
+        const hasSource = nodes.some((x) => CATALOG[x.kind].source);
+        const hasSink = Object.values(sim.nodes).some(
+          (sn) => !sn.entry.source && sn.inflow > 0.5,
+        );
+        const serving = hasSource && hasSink;
+        const healthy = serving && !sim.worst;
+
+        const r = heroTick({
+          users: u,
+          cash,
+          month,
+          stageIndex: stage,
+          businessId: hero.businessId,
+          cost: bill.total,
+          serving,
+          healthy,
+        });
+
+        u = r.users;
+        cash = r.cash;
+        month = r.month;
+        stage = r.stageIndex;
+        lastChurned = r.churned;
+        lastGrew = r.grew;
+        bankrupt = r.bankrupt;
+
+        if (r.stageChanged) {
+          const st = HERO_STAGES[stage];
+          stageMsgs.push(
+            `${st.glyph} ${st.name}${
+              r.grant ? ` · ${r.grantLabel} +${fmtMoney(r.grant)}` : ""
+            }`,
+          );
+        }
+        if (bankrupt) break;
+      }
+
+      const before = users;
+      setUsers(u);
+      setHero((h) => ({
+        ...h,
+        cash,
+        month,
+        bankrupt,
+        running: bankrupt ? false : h.running,
+      }));
+      setPitchMsg(null);
+
+      if (stageMsgs.length) {
+        const st = HERO_STAGES[stage];
+        setMeta({
+          index: st.glyph,
+          title: st.name.toUpperCase(),
+          blurb: st.blurb,
+        });
+        flash(stageMsgs.join("   ·   "));
+      } else if (bankrupt) {
+        flash("💀 out of money");
+      } else if (lastChurned) {
+        flash(`⚠ over capacity — users are leaving (${fmt(u)})`);
+      } else if (lastGrew) {
+        flash(`${fmt(u)} users  (+${fmt(Math.max(0, u - before))})`);
+      }
+      return { bankrupt, users: u };
+  };
+
+  const rollRef = useRef(rollMonths);
+  useEffect(() => {
+    rollRef.current = rollMonths;
+  });
+
+  // auto-run: a month every 900ms while ▶ is on
+  useEffect(() => {
+    if (mode !== "hero" || !hero.running || hero.bankrupt) return;
+    const t = window.setInterval(() => rollRef.current(1), 900);
+    return () => window.clearInterval(t);
+  }, [mode, hero.running, hero.bankrupt]);
+
+  /** change what kind of business you are — costs you users */
+  const pivotTo = (b: Business) => {
+      setHero((h) => ({ ...h, businessId: b.id }));
+      setUsers((u) => Math.max(1, Math.round(u * (1 - PIVOT_CHURN))));
+      setShowPivot(false);
+      setPitchMsg(null);
+      flash(
+        `pivoted to ${b.name} — ${Math.round(PIVOT_CHURN * 100)}% of your users left`,
+      );
+  };
+
+  /** ask investors for money. a gamble. `roll` comes from the click handler. */
+  const pitchRoll = (roll: number) => {
+    const win = roll < heroOdds;
+    if (win) {
+      const amount = pitchAmount({ revenue: heroRevenue, stageIndex: heroStage });
+      setHero((h) => ({ ...h, cash: h.cash + amount, raises: h.raises + 1 }));
+      setPitchMsg(`✅ They're in — +${fmtMoney(amount)} for the round.`);
+      flash(`raised ${fmtMoney(amount)}`);
+    } else {
+      setHero((h) => ({ ...h, raises: h.raises + 1 }));
+      setPitchMsg("❌ They passed. “Come back with more traction.”");
+      flash("the pitch fell flat");
+    }
+  };
+
+  const heroRestart = () => {
+    setHero({
+      cash: HERO_START_CASH,
+      month: 0,
+      businessId: HERO_START_BUSINESS,
+      running: false,
+      raises: 0,
+      bankrupt: false,
+    });
+    setNodes([]);
+    setEdges([]);
+    setDead([]);
+    setSelection([]);
+    setUsers(HERO_START_USERS);
+    setHistory([]);
+    setPitchMsg(null);
+    setShowPivot(false);
+    const st0 = HERO_STAGES[0];
+    setMeta({
+      index: st0.glyph,
+      title: st0.name.toUpperCase(),
+      blurb: st0.blurb,
+    });
+    flash("back to nothing — 25 users, $0 in the bank");
+  };
+
   const grade = challenge
     ? (() => {
         // "serves the load" — a source must actually reach something downstream,
@@ -1023,7 +1224,6 @@ export default function FlowStudio() {
         onChoose={chooseMode}
         scenarioCount={SCENARIOS.length}
         challengeCount={CHALLENGES.length}
-        buildCount={BUILD_CHALLENGES.length}
       />
     );
   }
@@ -1043,31 +1243,61 @@ export default function FlowStudio() {
           </div>
 
           <div className="mono ml-auto flex flex-wrap items-center gap-2 text-[10px]">
-            <div className="flex items-center gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5">
-              <span className="uppercase text-[var(--color-muted)]">users</span>
-              <input
-                type="range"
-                min={10000}
-                max={3000000}
-                step={10000}
-                value={users}
-                onChange={(e) => setUsers(Number(e.target.value))}
-                className="w-28"
-              />
-              <span className="w-14 text-right font-bold text-[var(--color-accent)]">
-                {fmtUsers(users)}
-              </span>
-            </div>
-            <Readout label="req/s" value={fmt(sim.rps)} tone="accent" />
-            <Readout label="p99" value={fmtMs(lat.endToEnd)} tone="accent" />
-            {challenge ? (
-              <Readout
-                label="spent"
-                value={`${fmtMoney(bill.total)} / ${fmtMoney(challenge.budget)}`}
-                tone={bill.total <= challenge.budget ? "good" : "bad"}
-              />
+            {mode === "hero" ? (
+              <>
+                <Readout
+                  label="stage"
+                  value={`${HERO_STAGES[heroStage].glyph} ${HERO_STAGES[heroStage].name}`}
+                  tone="good"
+                />
+                <Readout label="users" value={fmt(users)} tone="accent" />
+                <Readout label="mrr" value={fmtMoney(heroRevenue)} tone="good" />
+                <Readout
+                  label="bill"
+                  value={fmtMoney(bill.total)}
+                  tone={heroNet >= 0 ? "good" : "bad"}
+                />
+                <Readout
+                  label="cash"
+                  value={fmtMoney(hero.cash)}
+                  tone={hero.cash >= 0 ? "good" : "bad"}
+                />
+              </>
             ) : (
-              <Readout label="$/mo" value={fmtMoney(bill.total)} tone="good" />
+              <>
+                <div className="flex items-center gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5">
+                  <span className="uppercase text-[var(--color-muted)]">
+                    users
+                  </span>
+                  <input
+                    type="range"
+                    min={10000}
+                    max={3000000}
+                    step={10000}
+                    value={users}
+                    onChange={(e) => setUsers(Number(e.target.value))}
+                    className="w-28"
+                  />
+                  <span className="w-14 text-right font-bold text-[var(--color-accent)]">
+                    {fmtUsers(users)}
+                  </span>
+                </div>
+                <Readout label="req/s" value={fmt(sim.rps)} tone="accent" />
+                <Readout label="p99" value={fmtMs(lat.endToEnd)} tone="accent" />
+                {challenge ? (
+                  <Readout
+                    label="spent"
+                    value={`${fmtMoney(bill.total)} / ${fmtMoney(challenge.budget)}`}
+                    tone={bill.total <= challenge.budget ? "good" : "bad"}
+                  />
+                ) : (
+                  <Readout
+                    label="$/mo"
+                    value={fmtMoney(bill.total)}
+                    tone="good"
+                  />
+                )}
+              </>
             )}
             <button
               onClick={changeMode}
@@ -1076,13 +1306,15 @@ export default function FlowStudio() {
             >
               ⇤ modes
             </button>
-            <button
-              onClick={() => setTourStep(0)}
-              title="how this works"
-              className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5 text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-            >
-              ? help
-            </button>
+            {mode !== "hero" && (
+              <button
+                onClick={() => setTourStep(0)}
+                title="how this works"
+                className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5 text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+              >
+                ? help
+              </button>
+            )}
             <button
               onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
               title="toggle theme"
@@ -1095,6 +1327,30 @@ export default function FlowStudio() {
 
         {/* toolbar */}
         <div className="mono flex flex-wrap items-center gap-1.5 text-[10px]">
+          {mode === "hero" && (
+            <>
+              <Btn onClick={undo} disabled={!canUndo} title="undo (⌘Z)">
+                ↩ undo
+              </Btn>
+              <Btn onClick={redo} disabled={!canRedo} title="redo (⌘⇧Z)">
+                ↪ redo
+              </Btn>
+              <span className="mx-1 h-4 w-px bg-[var(--color-line)]" />
+              <Btn
+                onClick={clearAll}
+                tone={confirmClear ? "bad" : "default"}
+                title="remove every component and link from the canvas"
+              >
+                {confirmClear ? "⚠ click again" : "🧹 clear all"}
+              </Btn>
+              <Btn onClick={fit} title="zoom to fit">
+                fit
+              </Btn>
+            </>
+          )}
+
+          {mode !== "hero" && (
+            <>
           <div className="flex overflow-hidden rounded-lg border border-[var(--color-line)]">
             {(["info", "cost", "latency"] as const).map((v) => (
               <button
@@ -1192,6 +1448,8 @@ export default function FlowStudio() {
           >
             {confirmClear ? "⚠ click again" : "🧹 clear all"}
           </Btn>
+            </>
+          )}
         </div>
       </header>
 
@@ -1258,7 +1516,13 @@ export default function FlowStudio() {
 
                 {challenge.start === "empty" && (
                   <button
-                    onClick={rerollZero}
+                    onClick={() => {
+                      const pool = CHALLENGES.filter(
+                        (c) => c.start === "empty",
+                      );
+                      const c = pool[Math.floor(Math.random() * pool.length)];
+                      if (c) loadChallenge(c);
+                    }}
                     className="mono mt-2 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] py-1.5 text-[10px] text-[var(--color-muted)] transition hover:text-[var(--color-ink)]"
                   >
                     ↻ different target
@@ -1274,7 +1538,208 @@ export default function FlowStudio() {
             </Section>
           )}
 
-          <Section title="scenarios">
+          {mode === "hero" && (
+            <Section title={`${HERO_STAGES[heroStage].glyph} zero → hero`}>
+              <div className="panel rounded-xl p-3">
+                <div className="mb-2 flex items-baseline justify-between">
+                  <span className="text-[13px] font-bold text-[var(--color-ink)]">
+                    {HERO_STAGES[heroStage].name}
+                  </span>
+                  <span className="mono text-[9px] uppercase text-[var(--color-muted)]">
+                    month {hero.month}
+                  </span>
+                </div>
+                <p className="mb-3 text-[10.5px] leading-snug text-[var(--color-muted)]">
+                  {HERO_STAGES[heroStage].blurb}
+                </p>
+
+                <div className="mono mb-3 grid grid-cols-3 gap-1.5 text-[8.5px]">
+                  <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-1.5 py-1.5">
+                    <div className="uppercase text-[var(--color-muted)]">
+                      mrr
+                    </div>
+                    <div className="text-[11.5px] font-bold text-[var(--color-good)]">
+                      {fmtMoney(heroRevenue)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-1.5 py-1.5">
+                    <div className="uppercase text-[var(--color-muted)]">
+                      bill
+                    </div>
+                    <div className="text-[11.5px] font-bold text-[var(--color-ink)]">
+                      {fmtMoney(bill.total)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-1.5 py-1.5">
+                    <div className="uppercase text-[var(--color-muted)]">
+                      net/mo
+                    </div>
+                    <div
+                      className="text-[11.5px] font-bold"
+                      style={{
+                        color:
+                          heroNet >= 0
+                            ? "var(--color-good)"
+                            : "var(--color-bad)",
+                      }}
+                    >
+                      {heroNet >= 0 ? "+" : ""}
+                      {fmtMoney(heroNet)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mb-1 flex items-baseline justify-between">
+                  <span className="mono text-[9px] uppercase text-[var(--color-muted)]">
+                    bank
+                  </span>
+                  <span
+                    className="mono text-[13px] font-bold"
+                    style={{
+                      color:
+                        hero.cash >= 0
+                          ? "var(--color-good)"
+                          : "var(--color-bad)",
+                    }}
+                  >
+                    {fmtMoney(hero.cash)}
+                  </span>
+                </div>
+                <div className="mb-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-well)]">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${Math.max(2, Math.min(100, (hero.cash / Math.max(1, bill.total * 3)) * 100))}%`,
+                      background:
+                        hero.cash >= 0
+                          ? "var(--color-good)"
+                          : "var(--color-bad)",
+                    }}
+                  />
+                </div>
+                <div className="mono mb-3 text-[8.5px] leading-snug text-[var(--color-muted)]">
+                  {heroNet < 0
+                    ? `burning ${fmtMoney(-heroNet)}/mo — spend it all and you run out`
+                    : `profitable — ${fmtMoney(heroNet)}/mo goes into the bank`}
+                </div>
+
+                {heroNext && (
+                  <div className="mono mb-3 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-[9px] leading-snug text-[var(--color-muted)]">
+                    🔒 next unlock:{" "}
+                    <span className="text-[var(--color-ink)]">
+                      {heroNext.glyph} {heroNext.name}
+                    </span>
+                    <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[var(--color-panel2)]">
+                      <div
+                        className="h-full rounded-full bg-[var(--color-accent)]"
+                        style={{
+                          width: `${Math.min(100, (users / heroNext.users) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="mt-1">
+                      {fmt(users)} / {fmt(heroNext.users)} users
+                    </div>
+                  </div>
+                )}
+
+                <div className="mb-3 flex gap-1.5">
+                  <button
+                    onClick={() => rollMonths(1)}
+                    className="mono flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] py-1.5 text-[10px] text-[var(--color-ink)] transition hover:border-[var(--color-accent)]"
+                  >
+                    ⏩ +1 month
+                  </button>
+                  <button
+                    onClick={() => rollMonths(6)}
+                    className="mono flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] py-1.5 text-[10px] text-[var(--color-ink)] transition hover:border-[var(--color-accent)]"
+                  >
+                    ⏩⏩ +6
+                  </button>
+                  <button
+                    onClick={() => setHero((h) => ({ ...h, running: !h.running }))}
+                    className={`mono rounded-lg border px-3 py-1.5 text-[10px] transition ${
+                      hero.running
+                        ? "border-[var(--color-bad)] bg-[color-mix(in_srgb,var(--color-bad)_12%,transparent)] text-[var(--color-bad)]"
+                        : "border-[var(--color-line)] bg-[var(--color-well)] text-[var(--color-ink)] hover:border-[var(--color-accent)]"
+                    }`}
+                  >
+                    {hero.running ? "⏸" : "▶"}
+                  </button>
+                </div>
+
+                <div className="mono mb-1 text-[8px] uppercase tracking-widest text-[var(--color-muted)]">
+                  business
+                </div>
+                <div className="mono mb-2 flex items-center gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-[10px]">
+                  <span>{biz.glyph}</span>
+                  <span className="min-w-0 flex-1 truncate font-bold text-[var(--color-ink)]">
+                    {biz.name}
+                  </span>
+                  <span className="shrink-0 text-[var(--color-muted)]">
+                    ${biz.arpu.toFixed(2)}/user
+                  </span>
+                </div>
+                <button
+                  onClick={() => setShowPivot((v) => !v)}
+                  className="mono mb-2 w-full rounded-lg border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] py-1.5 text-[10px] text-[var(--color-accent)]"
+                >
+                  {showPivot ? "close" : "💼 change the business"}
+                </button>
+
+                {showPivot && (
+                  <div className="mb-2 flex flex-col gap-1">
+                    {BUSINESSES.filter((b) => b.id !== biz.id).map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={() => pivotTo(b)}
+                        title={b.blurb}
+                        className="mono rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-left text-[9.5px] transition hover:border-[var(--color-accent)]"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span>{b.glyph}</span>
+                          <span className="min-w-0 flex-1 truncate font-bold text-[var(--color-ink)]">
+                            {b.name}
+                          </span>
+                          <span className="shrink-0 text-[var(--color-muted)]">
+                            ${b.arpu.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 text-[8.5px] leading-snug text-[var(--color-muted)]">
+                          {b.blurb}
+                        </div>
+                      </button>
+                    ))}
+                    <div className="mono text-[8.5px] leading-snug text-[var(--color-bad)]">
+                      ⚠ pivoting loses {Math.round(PIVOT_CHURN * 100)}% of your
+                      users
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => pitchRoll(Math.random())}
+                  className="mono w-full rounded-lg border border-[var(--color-good)] bg-[color-mix(in_srgb,var(--color-good)_10%,transparent)] py-2 text-[10px] font-bold text-[var(--color-good)] transition hover:bg-[color-mix(in_srgb,var(--color-good)_16%,transparent)]"
+                >
+                  🙏 ask for funding · {Math.round(heroOdds * 100)}% chance
+                </button>
+                <div className="mono mt-1 text-center text-[8.5px] leading-snug text-[var(--color-muted)]">
+                  {hero.raises > 0
+                    ? `${hero.raises} pitch${hero.raises === 1 ? "" : "es"} so far — investors get harder to impress`
+                    : "a gamble: better traction means better odds"}
+                </div>
+                {pitchMsg && (
+                  <div className="mono mt-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-[9.5px] leading-snug text-[var(--color-ink)]">
+                    {pitchMsg}
+                  </div>
+                )}
+              </div>
+            </Section>
+          )}
+
+          {mode !== "hero" && (
+            <>
+              <Section title="scenarios">
             <div className="flex flex-col gap-1.5">
               {SCENARIOS.map((s) => (
                 <button
@@ -1333,6 +1798,8 @@ export default function FlowStudio() {
               ))}
             </div>
           </Section>
+            </>
+          )}
 
           {selection.length > 1 ? (
             <div className="panel fade-in rounded-xl p-4">
@@ -1370,6 +1837,8 @@ export default function FlowStudio() {
             />
           )}
 
+          {mode !== "hero" && (
+            <>
           <Section title="monthly bill">
             <div className="panel rounded-xl p-3">
               <div className="mb-2 flex items-baseline justify-between">
@@ -1554,9 +2023,20 @@ export default function FlowStudio() {
               </div>
             </Section>
           )}
+            </>
+          )}
 
           <Section title="add component">
-            <Palette onAdd={addNode} />
+            <Palette
+              onAdd={addNode}
+              unlocked={heroUnlocked}
+              lockedHint={(k) => {
+                const st = HERO_STAGES.find((s) => s.unlocks.includes(k));
+                return st
+                  ? `unlocks at ${fmt(st.users)} users · ${st.name}`
+                  : null;
+              }}
+            />
           </Section>
 
           {edges.length > 0 && (
@@ -1596,6 +2076,8 @@ export default function FlowStudio() {
             </Section>
           )}
 
+          {mode !== "hero" && (
+            <>
           <Section title="legend">
             <div className="mono flex flex-col gap-1 text-[9.5px] text-[var(--color-muted)]">
               <Legend c="var(--color-good)" t="healthy · under capacity" />
@@ -1613,6 +2095,8 @@ export default function FlowStudio() {
             shift-click or shift-drag to select many · scroll to zoom · drag bg
             to pan
           </div>
+            </>
+          )}
         </aside>
 
         {/* ============ CANVAS ============ */}
@@ -1803,6 +2287,41 @@ export default function FlowStudio() {
           </div>
         </main>
       </div>
+
+      {mode === "hero" && hero.bankrupt && (
+        <div className="absolute inset-0 z-40 grid place-items-center bg-[#0b112080] backdrop-blur-sm">
+          <div className="fade-in w-[440px] max-w-[92vw] rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6 text-center shadow-2xl">
+            <div className="text-[34px]">💀</div>
+            <div className="mono mt-1 text-[10px] uppercase tracking-widest text-[var(--color-bad)]">
+              out of money
+            </div>
+            <h2 className="mt-2 text-[20px] font-extrabold text-[var(--color-ink)]">
+              You ran out of cash
+            </h2>
+            <p className="mt-2 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+              You got all the way to{" "}
+              <span className="text-[var(--color-ink)]">
+                {HERO_STAGES[heroStage].name}
+              </span>{" "}
+              with {fmt(users)} users over {hero.month} months — then the bill
+              caught up with the bank. Keep spending below what you earn, or
+              raise money before the well runs dry.
+            </p>
+            <button
+              onClick={heroRestart}
+              className="mono mt-5 w-full rounded-lg border border-[var(--color-good)] bg-[color-mix(in_srgb,var(--color-good)_12%,transparent)] py-2.5 text-[11px] font-bold text-[var(--color-good)]"
+            >
+              ↺ start again from nothing
+            </button>
+            <button
+              onClick={changeMode}
+              className="mono mt-2 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] py-2 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              back to modes
+            </button>
+          </div>
+        </div>
+      )}
 
       {tourStep !== null && tourStep < TOUR.length && (
         <div className="absolute inset-0 z-40 grid place-items-center bg-[#0b112080] backdrop-blur-sm">

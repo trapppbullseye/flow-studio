@@ -13,12 +13,48 @@ The app opens on a mode picker rather than dropping you into a canvas:
 
 | Mode | What it is |
 | --- | --- |
-| **🪙 Zero → Hero** | **Start with nothing.** Blank canvas, **$0 spent**. You're given a traffic target and a monthly budget, and you build the entire system from scratch — wiring, sizing and all — while watching the bill climb from zero. Pass by serving the load, holding under it, and staying inside budget. `↻ different target` rerolls. |
+| **🪙 Zero → Hero** | **A progression, not a puzzle.** You start with nothing: **$0 in the bank**, 25 users, no revenue model, and only a free tier's worth of components unlocked. Users arrive on their own, they pay you, you pay your infrastructure bill, and the difference moves your bank. Cross a user threshold and a whole new tier of components unlocks — plus the funding round that comes with it. See below. |
 | **🧪 Sandbox** | **Everything unlocked.** Empty canvas, no budget, no rules. All 51 components plus chaos, replay, cost, latency and the IaC exports. For testing anything you like. |
 | **📚 Scenarios** | The six guided builds that teach the fundamentals. |
 | **⚔ Challenges** | Scored puzzles — repair a melting design or build from scratch, with a budget and a goal. |
 
 A `⇤ modes` button in the header takes you back to the picker at any time.
+
+## Zero → Hero: starting from nothing
+
+The mode deliberately hides every analysis tool. You get the canvas, a
+**user count**, your **business switch**, an **ask-for-funding** button, and
+**undo**. That's it — the rest is on you.
+
+**The loop.** Each month: users arrive (or leave), they pay you, you pay your
+bill, and the difference moves your bank balance. Hit a user threshold and the
+stage advances, unlocking a new tier of components *and* triggering a funding
+round. Five stages take you from a weekend side project to a real company:
+
+| Stage | Users | Unlocks | Funding |
+| --- | --- | --- | --- |
+| 🌱 Side project | 25 | free tier: serverless, object store, the traffic sources | — |
+| 🌿 Getting traction | 5,000 | API, database, cache, monitoring, logs | 🌱 Angel cheque |
+| 📈 Ramen profitable | 25,000 | load balancer, CDN, replicas, queues, workers, auth… | 💸 Seed round |
+| 💰 Funded | 150,000 | microservices, K8s, shards, search, event bus, payments… | 🚀 Series A |
+| 🏢 Business | 750,000 | regions, data warehouse, vector DB, GPU cluster, your own AI | 🏆 Scale-up |
+
+**Three levers, all yours:**
+
+- **💼 Change the business (pivot).** What kind of company you are sets your
+  ARPU and your growth — a straight trade-off. The default is a *hobby with no
+  revenue model at all*, so you earn nothing until you pick something:
+  media/ads ($0.05/user, fastest growth) → consumer app → game → marketplace →
+  SaaS ($2.50/user) → B2B ($9.00/user, glacier-slow). High ARPU means money now
+  but slow user growth, which stalls your stage unlocks. **Pivoting loses 30% of
+  your users** — they didn't sign up for the new thing.
+- **🙏 Ask for funding.** A gamble, and the odds are shown honestly before you
+  roll (~16% base, up with traction, profitability and a healthy system; down
+  each time you ask, because investors get bored). Land it and you get a cheque
+  worth at least six months of revenue. Miss and you get nothing but worse odds.
+- **Spend carefully.** Every component is a monthly bill. **Spend it all and you
+  run out of money** — drop below -$2,000 and it's over, with a summary of how
+  far you got.
 
 ## Generating challenges
 
@@ -133,6 +169,7 @@ flips the entire palette.
 Source layout:
 
 - `src/lib/design.ts` — catalog, pricing, latency constants, simulator, scenarios, challenges, presets
+- `src/lib/hero.ts` — the Zero → Hero progression: stages, unlocks, businesses, funding odds, the month tick
 - `src/lib/analysis.ts` — latency propagation and single-point-of-failure detection
 - `src/lib/explain.ts` — the plain-English design narrator
 - `src/lib/iac.ts` — Terraform and docker-compose generation

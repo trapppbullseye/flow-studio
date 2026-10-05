@@ -1,6 +1,6 @@
 "use client";
 
-export type Mode = "sandbox" | "zero" | "scenarios" | "challenges" | "shared";
+export type Mode = "hero" | "sandbox" | "scenarios" | "challenges" | "shared";
 
 interface CardDef {
   mode: Mode;
@@ -15,20 +15,19 @@ export default function ModeScreen({
   onChoose,
   scenarioCount,
   challengeCount,
-  buildCount,
 }: {
   onChoose: (m: Mode) => void;
   scenarioCount: number;
   challengeCount: number;
-  buildCount: number;
 }) {
   const cards: CardDef[] = [
     {
-      mode: "zero",
+      mode: "hero",
       glyph: "🪙",
       title: "Zero → Hero",
       blurb: "Start with nothing.",
-      detail: `Blank canvas, $0 spent. Build a whole system that serves the target load — and stay under budget. ${buildCount} targets, ↻ reroll any time.`,
+      detail:
+        "Blank canvas, $0 in the bank, no revenue model, only free-tier components. Users arrive on their own and fund you. Pivot the business, pitch investors (it's a gamble), unlock new tiers — side project all the way to a real company.",
       accent: "var(--color-good)",
     },
     {
@@ -53,7 +52,7 @@ export default function ModeScreen({
       glyph: "⚔",
       title: "Challenges",
       blurb: "Get graded.",
-      detail: `${challengeCount} scored puzzles — repair a melting design or build from scratch, with a budget and a goal.`,
+      detail: `${challengeCount} scored puzzles — repair a melting design or build one from scratch, with a budget and a goal.`,
       accent: "var(--color-warn)",
     },
   ];
