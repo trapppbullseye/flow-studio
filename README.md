@@ -17,21 +17,31 @@ graph. Whatever runs past its capacity lights up red as the bottleneck.
   of capacity turns red and gets called out in the banner.
 - **Tunable capacity** — select a node and slide its capacity to see the
   tipping point move.
+- **50 components**, searchable and grouped by tier.
+- **Light & dark themes** — light by default, toggle in the header.
 
-## Components
+## Components (50)
 
-Users · CDN · Load Balancer · API Server · Cache · Database · Read Replica ·
-Shard · Queue · Worker · AI Model — each with realistic capacity numbers.
+| Tier | Components |
+| --- | --- |
+| **entry** | Users · Web Browser · Mobile App · IoT Device |
+| **edge** | DNS · CDN · Firewall/WAF · Reverse Proxy · API Gateway |
+| **compute** | Load Balancer · API Server · Serverless Fn · Container · Orchestrator (K8s) · Microservice · GraphQL API · BFF · Auth/Identity · Rate Limiter · Circuit Breaker · Scheduler/Cron |
+| **data** | Cache · Database (SQL) · NoSQL DB · Data Warehouse · Data Lake · Object Storage · Search Index · Time-Series DB · Vector DB · Read Replica · Shard · Config Store |
+| **async** | Message Queue · Pub/Sub · Event Bus · Stream Processor · Worker · Dead Letter Queue |
+| **ai** | AI Model · Embedding Service · RAG Pipeline · GPU Cluster |
+| **ops** | Monitoring · Log Aggregator · APM/Tracing · Service Registry · Secrets Manager · Notification Svc · Payment Service |
 
 ## Scenarios
 
-Five guided builds that walk from failure to a system that holds:
+Six guided builds that walk from failure to a system that holds:
 
 1. **The Pressure Test** — millions of users, one database.
 2. **Cache the Reads** — 95% of traffic is reads.
 3. **Read Replicas** — split reads from writes.
 4. **Shard the Writes** — scale writes horizontally.
 5. **Full Scale** — every layer doing one job.
+6. **AI Stack** — retrieval, embeddings, a GPU-bound model, and one bridge.
 
 ## Run it
 
@@ -45,4 +55,5 @@ Open http://localhost:3000.
 ## Stack
 
 Next.js 16 (App Router) · React 19 · Tailwind CSS v4 · TypeScript. All
-simulation logic is client-side — no backend required.
+simulation logic is client-side — no backend required. Theming is driven by
+CSS custom properties, so `[data-theme="dark"]` flips the entire palette.
