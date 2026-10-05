@@ -1,6 +1,13 @@
 "use client";
 
-import { CATALOG, fmt, type NodeKind, type SimNode } from "@/lib/design";
+import { useMemo, useState } from "react";
+import {
+  CATALOG,
+  PALETTE_GROUPS,
+  fmt,
+  type NodeKind,
+  type SimNode,
+} from "@/lib/design";
 import { NODE_W, NODE_H } from "./NodeCard";
 
 interface Props {
@@ -33,7 +40,10 @@ export default function Inspector({ sim, onDelete, onCapacity, onClose }: Props)
         <div className="flex items-center gap-2">
           <span
             className="mono grid h-7 w-7 place-items-center rounded-md text-[15px]"
-            style={{ background: `${e.color}1f`, color: e.color }}
+            style={{
+              background: `color-mix(in srgb, ${e.color} 14%, transparent)`,
+              color: e.color,
+            }}
           >
             {e.glyph}
           </span>
@@ -62,17 +72,19 @@ export default function Inspector({ sim, onDelete, onCapacity, onClose }: Props)
         </span>
         <span
           className="mono text-[10px] font-bold"
-          style={{ color: sim.overloaded ? "#ef4444" : e.color }}
+          style={{
+            color: sim.overloaded ? "var(--color-bad)" : e.color,
+          }}
         >
           {sim.capacity === Infinity ? "—" : `${rawPct}%`}
         </span>
       </div>
-      <div className="mb-3 h-2 w-full overflow-hidden rounded-full bg-[#0a1120]">
+      <div className="mb-3 h-2 w-full overflow-hidden rounded-full bg-[var(--color-well)]">
         <div
           className="h-full rounded-full transition-all duration-500"
           style={{
             width: `${sim.capacity === Infinity ? 100 : barPct}%`,
-            background: sim.overloaded ? "#ef4444" : e.color,
+            background: sim.overloaded ? "var(--color-bad)" : e.color,
           }}
         />
       </div>
@@ -105,7 +117,7 @@ export default function Inspector({ sim, onDelete, onCapacity, onClose }: Props)
 
       <button
         onClick={onDelete}
-        className="mono w-full rounded-lg border border-[#ef444433] bg-[#ef44440f] py-1.5 text-[10.5px] text-[#ef4444] transition hover:bg-[#ef44441f]"
+        className="mono w-full rounded-lg border border-[color-mix(in_srgb,var(--color-bad)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-bad)_8%,transparent)] py-1.5 text-[10.5px] text-[var(--color-bad)] transition hover:bg-[color-mix(in_srgb,var(--color-bad)_14%,transparent)]"
       >
         delete component
       </button>
@@ -118,7 +130,7 @@ export default function Inspector({ sim, onDelete, onCapacity, onClose }: Props)
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-[var(--color-line)] bg-[#0a1120] px-2.5 py-1.5">
+    <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2.5 py-1.5">
       <div className="mono text-[8.5px] uppercase text-[var(--color-muted)]">
         {label}
       </div>
@@ -132,34 +144,59 @@ export function Palette({
 }: {
   onAdd: (k: NodeKind) => void;
 }) {
-  const order: NodeKind[] = [
-    "client",
-    "cdn",
-    "loadbalancer",
-    "api",
-    "cache",
-    "database",
-    "replica",
-    "shard",
-    "queue",
-    "worker",
-    "model",
-  ];
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+
+  const groups = useMemo(
+    () =>
+      PALETTE_GROUPS.map((g) => ({
+        ...g,
+        kinds: (Object.keys(CATALOG) as NodeKind[]).filter(
+          (k) =>
+            CATALOG[k].layer === g.layer &&
+            (!q || CATALOG[k].name.toLowerCase().includes(q)),
+        ),
+      })).filter((g) => g.kinds.length),
+    [q],
+  );
+
   return (
-    <div className="grid grid-cols-2 gap-1.5">
-      {order.map((k) => {
-        const e = CATALOG[k];
-        return (
-          <button
-            key={k}
-            onClick={() => onAdd(k)}
-            className="mono flex items-center gap-1.5 rounded-lg border border-[var(--color-line)] bg-[#0a1120] px-2 py-1.5 text-left text-[10px] transition hover:border-[var(--color-accent)] hover:bg-[#111a2b]"
-          >
-            <span style={{ color: e.color }}>{e.glyph}</span>
-            <span className="truncate">{e.name}</span>
-          </button>
-        );
-      })}
+    <div className="flex flex-col gap-2.5">
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="search 50 components…"
+        className="mono w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2.5 py-1.5 text-[10px] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)]"
+      />
+
+      {groups.map((g) => (
+        <div key={g.layer}>
+          <div className="mono mb-1 px-0.5 text-[8px] uppercase tracking-widest text-[var(--color-muted)]">
+            {g.label}
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {g.kinds.map((k) => {
+              const e = CATALOG[k];
+              return (
+                <button
+                  key={k}
+                  onClick={() => onAdd(k)}
+                  className="mono flex items-center gap-1.5 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-left text-[9.5px] transition hover:border-[var(--color-accent)] hover:bg-[var(--color-panel2)]"
+                >
+                  <span style={{ color: e.color }}>{e.glyph}</span>
+                  <span className="truncate">{e.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {!groups.length && (
+        <div className="mono px-1 py-2 text-[10px] text-[var(--color-muted)]">
+          no components match “{query}”
+        </div>
+      )}
     </div>
   );
 }

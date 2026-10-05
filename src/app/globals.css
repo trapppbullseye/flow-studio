@@ -1,17 +1,65 @@
 @import "tailwindcss";
 
+/* ============================================================
+   THEME TOKENS — light is the default; [data-theme="dark"] flips
+   ============================================================ */
 @theme inline {
+  --color-bg: #eef2f7;
+  --color-panel: #ffffff;
+  --color-panel2: #f1f5f9;
+  --color-well: #e9eef5;
+  --color-line: #d3dce8;
+  --color-ink: #0f1c2e;
+  --color-muted: #5b6b83;
+  --color-good: #16a34a;
+  --color-bad: #dc2626;
+  --color-warn: #ca8a04;
+  --color-accent: #0284c7;
+
+  --color-bad-soft: #fef2f2f2;
+  --color-good-soft: #f0fdf4f2;
+  --color-bad-border: #dc262655;
+  --color-good-border: #16a34a55;
+  --color-strip: #ffffffcc;
+  --color-canvas-dot: rgba(91, 107, 131, 0.3);
+  --color-thumb-ring: #ffffff;
+  --color-scroll: #c2cedd;
+  --shadow-node: rgba(15, 28, 46, 0.18);
+
+  --edge-read: #0284c7;
+  --edge-write: #e11d48;
+  --edge-async: #ca8a04;
+
+  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-geist-sans);
+}
+
+[data-theme="dark"] {
   --color-bg: #060a12;
   --color-panel: #0c1320;
   --color-panel2: #111a2b;
+  --color-well: #0a1120;
   --color-line: #1b2740;
   --color-ink: #e6edf7;
   --color-muted: #7d8ba6;
   --color-good: #22c55e;
   --color-bad: #ef4444;
+  --color-warn: #facc15;
   --color-accent: #38bdf8;
-  --font-mono: var(--font-geist-mono);
-  --font-sans: var(--font-geist-sans);
+
+  --color-bad-soft: #1a0d12ee;
+  --color-good-soft: #0a1a11ee;
+  --color-bad-border: #ef444455;
+  --color-good-border: #22c55e55;
+  --color-strip: #0c1320cc;
+  --color-canvas-dot: rgba(125, 139, 166, 0.22);
+  --color-thumb-ring: #050810;
+  --color-scroll: #223050;
+  --shadow-node: rgba(0, 0, 0, 0.6);
+
+  --edge-read: #38bdf8;
+  --edge-write: #f43f5e;
+  --edge-async: #facc15;
 }
 
 * {
@@ -29,6 +77,7 @@ body {
   color: var(--color-ink);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
   overscroll-behavior: none;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 /* ---------- dot grid canvas ---------- */
@@ -36,7 +85,7 @@ body {
   background-color: var(--color-bg);
   background-image: radial-gradient(
     circle at 1px 1px,
-    rgba(125, 139, 166, 0.22) 1px,
+    var(--color-canvas-dot) 1px,
     transparent 0
   );
   background-size: 26px 26px;
@@ -69,7 +118,8 @@ body {
 
 /* ---------- node states ---------- */
 .node-card {
-  transition: box-shadow 0.25s ease, border-color 0.25s ease, transform 0.08s ease;
+  transition: box-shadow 0.25s ease, border-color 0.25s ease,
+    background 0.2s ease, transform 0.08s ease;
   user-select: none;
 }
 .node-over {
@@ -78,10 +128,10 @@ body {
 @keyframes alarm {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-bad) 45%, transparent);
   }
   50% {
-    box-shadow: 0 0 24px 3px rgba(239, 68, 68, 0.45);
+    box-shadow: 0 0 24px 3px color-mix(in srgb, var(--color-bad) 30%, transparent);
   }
 }
 
@@ -131,7 +181,8 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 50%;
   background: var(--color-accent);
   cursor: pointer;
-  border: 2px solid #050810;
+  border: 2px solid var(--color-thumb-ring);
+  box-shadow: 0 1px 3px rgba(15, 28, 46, 0.25);
 }
 
 ::-webkit-scrollbar {
@@ -139,7 +190,7 @@ input[type="range"]::-webkit-slider-thumb {
   height: 9px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #223050;
+  background: var(--color-scroll);
   border-radius: 999px;
 }
 ::-webkit-scrollbar-track {
