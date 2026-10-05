@@ -10,6 +10,7 @@ export type NodeKind =
   | "waf"
   | "proxy"
   | "gateway"
+  | "region"
   // compute
   | "loadbalancer"
   | "api"
@@ -196,6 +197,18 @@ export const CATALOG: Record<NodeKind, CatalogEntry> = {
     capacity: 150000,
     passthrough: 1,
     color: "#2563eb",
+    layer: "edge",
+  },
+  region: {
+    kind: "region",
+    name: "Region Router",
+    glyph: "⊕",
+    tagline: "geo load balancing",
+    about:
+      "Sends each user to the nearest healthy region and fails over when one goes dark. The seam that turns one datacenter into a global service.",
+    capacity: 300000,
+    passthrough: 1,
+    color: "#0ea5e9",
     layer: "edge",
   },
 
@@ -574,7 +587,7 @@ export const CATALOG: Record<NodeKind, CatalogEntry> = {
     about:
       "The expensive one. Runs on GPUs, costs real money per token, and saturates fast. Batch it, cache it, or route only the requests that deserve it.",
     capacity: 500,
-    passthrough: 0,
+    passthrough: 1,
     color: "#6366f1",
     layer: "ai",
   },
@@ -586,7 +599,7 @@ export const CATALOG: Record<NodeKind, CatalogEntry> = {
     about:
       "Turns text into vectors for search and memory. Cheap compared to generation, but called constantly.",
     capacity: 2000,
-    passthrough: 0,
+    passthrough: 1,
     color: "#8b5cf6",
     layer: "ai",
   },
@@ -598,7 +611,7 @@ export const CATALOG: Record<NodeKind, CatalogEntry> = {
     about:
       "Fetches relevant context from the vector store, stuffs it into the prompt, then asks the model. Grounds answers in your data.",
     capacity: 800,
-    passthrough: 0,
+    passthrough: 1,
     color: "#d946ef",
     layer: "ai",
   },
@@ -901,6 +914,7 @@ export interface SimNode {
   inflow: number;
   load: number;
   overloaded: boolean;
+  dead: boolean;
 }
 export interface SimEdge {
   edge: Edge;
@@ -913,6 +927,8 @@ export interface Sim {
   edges: Record<string, SimEdge>;
   rps: number;
   worst: SimNode | null;
+  /** requests/sec that arrived at a dead component and were lost */
+  dropped: number;
 }
 
 export const usersToRps = (users: number) => users / 10;
@@ -923,7 +939,12 @@ export const weightOf = (e: Edge) => (e.weight ?? 1);
  * Fixed-point traffic propagation. Sources emit; every node forwards its
  * `passthrough` fraction, split across outgoing edges by edge weight.
  */
-export function simulate(nodes: FlowNode[], edges: Edge[], users: number): Sim {
+export function simulate(
+  nodes: FlowNode[],
+  edges: Edge[],
+  users: number,
+  dead: Set<string> = new Set(),
+): Sim {
   const rps = usersToRps(users);
   const sources = nodes.filter((n) => CATALOG[n.kind].source);
   const outgoing = new Map<string, Edge[]>();
@@ -940,6 +961,7 @@ export function simulate(nodes: FlowNode[], edges: Edge[], users: number): Sim {
     for (const s of sources) next.set(s.id, (next.get(s.id) ?? 0) + seed);
     for (const n of nodes) {
       const entry = CATALOG[n.kind];
+      if (dead.has(n.id)) continue; // down: receives but forwards nothing
       const inFlow = entry.source ? seed : (flow.get(n.id) ?? 0);
       const outs = outgoing.get(n.id) ?? [];
       if (!outs.length) continue;
@@ -961,6 +983,7 @@ export function simulate(nodes: FlowNode[], edges: Edge[], users: number): Sim {
     const capacity = n.capacity ?? entry.capacity;
     const inflow = flow.get(n.id) ?? 0;
     const load = capacity === Infinity ? 0 : inflow / capacity;
+    const isDead = dead.has(n.id);
     const sn: SimNode = {
       node: n,
       entry,
@@ -968,9 +991,11 @@ export function simulate(nodes: FlowNode[], edges: Edge[], users: number): Sim {
       inflow,
       load,
       overloaded: load > 1,
+      dead: isDead,
     };
     simNodes[n.id] = sn;
-    if (sn.overloaded && (worst === null || load > worst.load)) worst = sn;
+    if (!isDead && sn.overloaded && (worst === null || load > worst.load))
+      worst = sn;
   }
 
   const simEdges: Record<string, SimEdge> = {};
@@ -979,12 +1004,18 @@ export function simulate(nodes: FlowNode[], edges: Edge[], users: number): Sim {
     const entry = CATALOG[src.node.kind];
     const outs = outgoing.get(e.from) ?? [];
     const totalW = outs.reduce((a, x) => a + weightOf(x), 0) || 1;
-    const flowVal = (src.inflow * entry.passthrough * weightOf(e)) / totalW;
+    const pass = src.dead ? 0 : entry.passthrough;
+    const flowVal = (src.inflow * pass * weightOf(e)) / totalW;
     const load = src.capacity === Infinity ? 0 : src.inflow / src.capacity;
     simEdges[e.id] = { edge: e, flow: flowVal, load, overloaded: load > 1 };
   }
 
-  return { nodes: simNodes, edges: simEdges, rps, worst };
+  let dropped = 0;
+  for (const n of nodes) {
+    if (dead.has(n.id) && !CATALOG[n.kind].source) dropped += simNodes[n.id].inflow;
+  }
+
+  return { nodes: simNodes, edges: simEdges, rps, worst, dropped };
 }
 
 export const fmt = (n: number) =>
@@ -1018,6 +1049,7 @@ export const COST: Record<NodeKind, Price> = {
   waf: { base: 30, perM: 0.6 },
   proxy: { base: 20, perM: 0.02 },
   gateway: { base: 40, perM: 0.9 },
+  region: { base: 90, perM: 0.05 },
   loadbalancer: { base: 25, perM: 0.008 },
   api: { base: 35, perM: 0.4 },
   serverless: { base: 0, perM: 0.2 },
@@ -1174,3 +1206,245 @@ export function smartStack(users: number): {
   });
   return { nodes: sized, edges };
 }
+
+/* ============================================================
+   ABBREVIATIONS — short labels that fit on a node card
+   ============================================================ */
+export const SHORT: Record<NodeKind, string> = {
+  client: "Users",
+  browser: "Browser",
+  mobile: "Mobile",
+  iot: "IoT",
+  dns: "DNS",
+  cdn: "CDN",
+  waf: "WAF",
+  proxy: "Proxy",
+  gateway: "Gateway",
+  region: "Region",
+  loadbalancer: "Load Balancer",
+  api: "API Server",
+  serverless: "Serverless",
+  container: "Container",
+  orchestrator: "K8s",
+  microservice: "Microservice",
+  graphql: "GraphQL",
+  bff: "BFF",
+  auth: "Auth",
+  ratelimit: "Rate Limiter",
+  circuit: "Breaker",
+  scheduler: "Scheduler",
+  cache: "Cache",
+  database: "SQL DB",
+  nosql: "NoSQL",
+  warehouse: "Warehouse",
+  lake: "Data Lake",
+  objectstore: "Object Store",
+  search: "Search",
+  timeseries: "TSDB",
+  vectordb: "Vector DB",
+  replica: "Replica",
+  shard: "Shard",
+  config: "Config",
+  queue: "Queue",
+  pubsub: "Pub/Sub",
+  eventbus: "Event Bus",
+  stream: "Stream",
+  worker: "Worker",
+  dlq: "DLQ",
+  model: "AI Model",
+  embedding: "Embeddings",
+  rag: "RAG",
+  gpu: "GPU Cluster",
+  monitoring: "Monitoring",
+  logging: "Logs",
+  tracing: "Tracing",
+  registry: "Registry",
+  secrets: "Secrets",
+  notify: "Notify",
+  payment: "Payments",
+};
+
+export const shortName = (k: NodeKind) => SHORT[k] ?? CATALOG[k].name;
+
+/* ============================================================
+   LATENCY — base p99 (ms) per hop, under no contention
+   ============================================================ */
+export const LATENCY: Record<NodeKind, number> = {
+  client: 0,
+  browser: 0,
+  mobile: 0,
+  iot: 0,
+  dns: 20,
+  cdn: 15,
+  waf: 6,
+  proxy: 4,
+  gateway: 12,
+  region: 8,
+  loadbalancer: 3,
+  api: 45,
+  serverless: 120,
+  container: 40,
+  orchestrator: 2,
+  microservice: 35,
+  graphql: 25,
+  bff: 20,
+  auth: 18,
+  ratelimit: 3,
+  circuit: 2,
+  scheduler: 5,
+  cache: 2,
+  database: 25,
+  nosql: 12,
+  warehouse: 900,
+  lake: 60,
+  objectstore: 40,
+  search: 35,
+  timeseries: 20,
+  vectordb: 15,
+  replica: 22,
+  shard: 20,
+  config: 8,
+  queue: 10,
+  pubsub: 8,
+  eventbus: 8,
+  stream: 25,
+  worker: 120,
+  dlq: 5,
+  model: 1400,
+  embedding: 60,
+  rag: 220,
+  gpu: 900,
+  monitoring: 15,
+  logging: 10,
+  tracing: 8,
+  registry: 6,
+  secrets: 10,
+  notify: 200,
+  payment: 350,
+};
+
+/* ============================================================
+   MULTI-REGION — add a second region: a region router splits
+   traffic 50/50 and the whole app subtree is duplicated.
+   ============================================================ */
+export function addSecondRegion(
+  nodes: FlowNode[],
+  edges: Edge[],
+): { nodes: FlowNode[]; edges: Edge[]; added: number } {
+  const ns = nodes.map((n) => ({ ...n }));
+  const es = edges.map((e) => ({ ...e }));
+  const sources = ns.filter((n) => CATALOG[n.kind].source);
+  if (!sources.length) return { nodes: ns, edges: es, added: 0 };
+
+  let region = ns.find((n) => n.kind === "region");
+  if (!region) {
+    const rx = Math.min(...sources.map((s) => s.x)) + 320;
+    const ry = Math.round(
+      sources.reduce((a, s) => a + s.y, 0) / sources.length,
+    );
+    region = { id: newId("region"), kind: "region", x: rx, y: ry };
+    ns.push(region);
+    const srcIds = new Set(sources.map((s) => s.id));
+    const targets = Array.from(
+      new Set(es.filter((e) => srcIds.has(e.from)).map((e) => e.to)),
+    );
+    for (const e of es) if (srcIds.has(e.from)) e.to = region.id;
+    for (const t of targets)
+      es.push({ id: `${region.id}->${t}`, from: region.id, to: t, mode: "read" });
+  }
+
+  // subtree reachable from the router's targets
+  const entries = Array.from(
+    new Set(es.filter((e) => e.from === region!.id).map((e) => e.to)),
+  );
+  const children = new Map<string, string[]>();
+  for (const e of es) {
+    const a = children.get(e.from) ?? [];
+    a.push(e.to);
+    children.set(e.from, a);
+  }
+  const subtree: string[] = [];
+  const seen = new Set<string>();
+  const stack = [...entries];
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    subtree.push(id);
+    for (const c of children.get(id) ?? []) if (!seen.has(c)) stack.push(c);
+  }
+
+  const minY = Math.min(...subtree.map((id) => ns.find((n) => n.id === id)!.y));
+  const maxY = Math.max(...ns.map((n) => n.y));
+  const dy = maxY - minY + 240;
+
+  const idMap = new Map<string, string>();
+  for (const id of subtree) {
+    const orig = ns.find((n) => n.id === id)!;
+    const copy: FlowNode = {
+      ...orig,
+      id: newId(orig.kind),
+      y: orig.y + dy,
+    };
+    idMap.set(id, copy.id);
+    ns.push(copy);
+  }
+  for (const t of entries) {
+    const c = idMap.get(t);
+    if (c) es.push({ id: `${region.id}->${c}`, from: region.id, to: c, mode: "read" });
+  }
+  const internal = es.filter((e) => idMap.has(e.from) && idMap.has(e.to));
+  for (const e of internal) {
+    const a = idMap.get(e.from)!;
+    const b = idMap.get(e.to)!;
+    es.push({ id: `${a}->${b}`, from: a, to: b, mode: e.mode, weight: e.weight });
+  }
+  return { nodes: ns, edges: es, added: subtree.length };
+}
+
+/* ============================================================
+   CHALLENGES — a broken/fixed-by-you scenario with a budget
+   ============================================================ */
+export interface Challenge {
+  id: string;
+  title: string;
+  brief: string;
+  budget: number;
+  users: number;
+  nodes: FlowNode[];
+  edges: Edge[];
+  requireNoSpof: boolean;
+}
+
+export const CHALLENGES: Challenge[] = [
+  {
+    id: "melt",
+    title: "FIX THE MELT",
+    brief: "One database, 750k users. Make it hold — without blowing a $200k/mo budget.",
+    budget: 200000,
+    users: 750000,
+    nodes: SCENARIOS[0].nodes,
+    edges: SCENARIOS[0].edges,
+    requireNoSpof: false,
+  },
+  {
+    id: "harden",
+    title: "REMOVE THE SPOF",
+    brief: "Make this stack hold AND survive any single component dying. Budget $400k/mo.",
+    budget: 400000,
+    users: 700000,
+    nodes: SCENARIOS[2].nodes,
+    edges: SCENARIOS[2].edges,
+    requireNoSpof: true,
+  },
+  {
+    id: "ai",
+    title: "AI ON A BUDGET",
+    brief: "Serve the AI stack at 300k users for under $3M/mo.",
+    budget: 3000000,
+    users: 300000,
+    nodes: SCENARIOS[5].nodes,
+    edges: SCENARIOS[5].edges,
+    requireNoSpof: false,
+  },
+];

@@ -6,25 +6,35 @@ import {
   PALETTE_GROUPS,
   fmt,
   fmtMoney,
+  shortName,
   type NodeKind,
   type NodeCost,
   type SimNode,
 } from "@/lib/design";
 import { NODE_W, NODE_H } from "./NodeCard";
+import { fmtMs } from "@/lib/analysis";
 
 interface Props {
   sim: SimNode | null;
   cost: NodeCost | null;
+  latency: number;
+  baseLatency: number;
+  spof: boolean;
   onDelete: () => void;
   onCapacity: (v: number) => void;
+  onToggleDead: () => void;
   onClose: () => void;
 }
 
 export default function Inspector({
   sim,
   cost,
+  latency,
+  baseLatency,
+  spof,
   onDelete,
   onCapacity,
+  onToggleDead,
   onClose,
 }: Props) {
   if (!sim) {
@@ -98,13 +108,22 @@ export default function Inspector({
         />
       </div>
 
-      <div className="mb-3 grid grid-cols-2 gap-2">
+      <div className="mb-2 grid grid-cols-2 gap-2">
         <Stat label="inflow" value={`${fmt(sim.inflow)} rps`} />
         <Stat
           label="capacity"
           value={sim.capacity === Infinity ? "∞" : `${fmt(sim.capacity)} rps`}
         />
+        <Stat label="p99 latency" value={sim.dead ? "down" : fmtMs(latency)} />
+        <Stat label="base p99" value={`${Math.round(baseLatency)} ms`} />
       </div>
+
+      {spof && (
+        <div className="mono mb-3 rounded-lg border border-[color-mix(in_srgb,var(--color-warn)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-warn)_10%,transparent)] px-2.5 py-2 text-[9.5px] leading-relaxed text-[var(--color-warn)]">
+          ⚠ single point of failure — if this dies, everything behind it goes
+          dark. Add a replica or a second path.
+        </div>
+      )}
 
       {sim.capacity !== Infinity && (
         <div className="mb-3">
@@ -141,6 +160,17 @@ export default function Inspector({
           </div>
         </div>
       )}
+
+      <button
+        onClick={onToggleDead}
+        className={`mono mb-1.5 w-full rounded-lg border py-1.5 text-[10.5px] transition ${
+          sim.dead
+            ? "border-[color-mix(in_srgb,var(--color-good)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-good)_10%,transparent)] text-[var(--color-good)] hover:bg-[color-mix(in_srgb,var(--color-good)_18%,transparent)]"
+            : "border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warn)_10%,transparent)] text-[var(--color-warn)] hover:bg-[color-mix(in_srgb,var(--color-warn)_18%,transparent)]"
+        }`}
+      >
+        {sim.dead ? "↺ bring back online" : "💥 kill this node"}
+      </button>
 
       <button
         onClick={onDelete}
@@ -219,10 +249,11 @@ export function Palette({
                 <button
                   key={k}
                   onClick={() => onAdd(k)}
+                  title={`${e.name} — ${e.tagline}`}
                   className="mono flex items-center gap-1.5 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-left text-[9.5px] transition hover:border-[var(--color-accent)] hover:bg-[var(--color-panel2)]"
                 >
                   <span style={{ color: e.color }}>{e.glyph}</span>
-                  <span className="truncate">{e.name}</span>
+                  <span className="truncate">{shortName(k)}</span>
                 </button>
               );
             })}
