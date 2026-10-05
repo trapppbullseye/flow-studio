@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Flow Studio
 
-## Getting Started
+Link components together — see how the system holds.
 
-First, run the development server:
+A system-design playground. Drag infrastructure blocks onto the canvas, wire
+them together, crank the user count, and watch traffic propagate through the
+graph. Whatever runs past its capacity lights up red as the bottleneck.
+
+## What it does
+
+- **Drag-and-drop canvas** — pan, zoom, drag nodes.
+- **Link mode** — click 🔗 then two nodes to wire them (read / write / async).
+- **Live traffic simulation** — a fixed-point propagation pass pushes requests
+  per second through the graph. Caches and CDNs absorb their share; the rest
+  flows downstream.
+- **Bottleneck detection** — every node shows a load meter. Anything over 100%
+  of capacity turns red and gets called out in the banner.
+- **Tunable capacity** — select a node and slide its capacity to see the
+  tipping point move.
+
+## Components
+
+Users · CDN · Load Balancer · API Server · Cache · Database · Read Replica ·
+Shard · Queue · Worker · AI Model — each with realistic capacity numbers.
+
+## Scenarios
+
+Five guided builds that walk from failure to a system that holds:
+
+1. **The Pressure Test** — millions of users, one database.
+2. **Cache the Reads** — 95% of traffic is reads.
+3. **Read Replicas** — split reads from writes.
+4. **Shard the Writes** — scale writes horizontally.
+5. **Full Scale** — every layer doing one job.
+
+## Run it
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Stack
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Next.js 16 (App Router) · React 19 · Tailwind CSS v4 · TypeScript. All
+simulation logic is client-side — no backend required.
