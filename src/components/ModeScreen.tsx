@@ -27,7 +27,7 @@ export default function ModeScreen({
       title: "Zero → Hero",
       blurb: "Start with nothing.",
       detail:
-        "Blank canvas, $0 in the bank, no revenue model, only free-tier components. Users arrive on their own and fund you. Pivot the business, pitch investors (it's a gamble), unlock new tiers — side project all the way to a real company.",
+        "Blank canvas, $0 in the bank, no revenue model, only free-tier parts. Buy components as you can afford them, ship a website or mobile app so users actually pay, pivot the business, pitch investors (a gamble), and earn free hardware as you climb — side project all the way to a real company.",
       accent: "var(--color-good)",
     },
     {

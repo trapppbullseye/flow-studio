@@ -31,30 +31,39 @@ bill, and the difference moves your bank balance. Hit a user threshold and the
 stage advances, unlocking a new tier of components *and* triggering a funding
 round. Five stages take you from a weekend side project to a real company:
 
-| Stage | Users | Unlocks | Funding |
-| --- | --- | --- | --- |
-| 🌱 Side project | 25 | free tier: serverless, object store, the traffic sources | — |
-| 🌿 Getting traction | 5,000 | API, database, cache, monitoring, logs | 🌱 Angel cheque |
-| 📈 Ramen profitable | 25,000 | load balancer, CDN, replicas, queues, workers, auth… | 💸 Seed round |
-| 💰 Funded | 150,000 | microservices, K8s, shards, search, event bus, payments… | 🚀 Series A |
-| 🏢 Business | 750,000 | regions, data warehouse, vector DB, GPU cluster, your own AI | 🏆 Scale-up |
+| Stage | Users | Unlocks | Funding | Free nodes |
+| --- | --- | --- | --- | --- |
+| 🌱 Side project | 25 | serverless & DNS are $0; clients are free | — | — |
+| 🌿 Getting traction | 5,000 | API, database, cache, monitoring, logs | 🌱 Angel cheque | 🎁 2 |
+| 📈 Ramen profitable | 25,000 | load balancer, CDN, replicas, queues, workers, auth… | 💸 Seed round | 🎁 3 |
+| 💰 Funded | 150,000 | microservices, K8s, shards, search, event bus, payments… | 🚀 Series A | 🎁 5 |
+| 🏢 Business | 750,000 | regions, data warehouse, vector DB, GPU cluster, your own AI | 🏆 Scale-up | 🎁 8 |
 
 **Three levers, all yours:**
 
+- **🛒 Buy your components.** Nothing is free except the free tier. Every
+  component has a **one-off purchase price** (an API is $105, a database $660,
+  object storage $75, serverless and DNS are $0). You can't place what you can't
+  afford — the palette greys it out. Selling a component back returns half.
+- **🌐 Ship a client, or nobody pays.** Revenue only starts once a real
+  **Web Browser or Mobile App** is wired into your backend. Raw traffic from the
+  generic *Users* node is not a business — you'll watch the bill climb while MRR
+  sits at $0.00 until you ship.
 - **💼 Change the business (pivot).** What kind of company you are sets your
   ARPU and your growth — a straight trade-off. The default is a *hobby with no
-  revenue model at all*, so you earn nothing until you pick something:
-  media/ads ($0.05/user, fastest growth) → consumer app → game → marketplace →
-  SaaS ($2.50/user) → B2B ($9.00/user, glacier-slow). High ARPU means money now
-  but slow user growth, which stalls your stage unlocks. **Pivoting loses 30% of
-  your users** — they didn't sign up for the new thing.
-- **🙏 Ask for funding.** A gamble, and the odds are shown honestly before you
-  roll (~16% base, up with traction, profitability and a healthy system; down
-  each time you ask, because investors get bored). Land it and you get a cheque
-  worth at least six months of revenue. Miss and you get nothing but worse odds.
-- **Spend carefully.** Every component is a monthly bill. **Spend it all and you
-  run out of money** — drop below -$2,000 and it's over, with a summary of how
-  far you got.
+  revenue model at all*: media/ads ($0.05/user, fastest growth) → consumer app →
+  game → marketplace → SaaS ($2.50/user) → B2B ($9.00/user, glacier-slow). High
+  ARPU means money now but slow user growth, which stalls your unlocks.
+  **Pivoting loses 30% of your users.**
+- **🙏 Ask for funding.** A gamble, odds shown before you roll (~16% base, up
+  with traction, profitability and a healthy system; down each time you ask).
+  Land it and you get at least six months of revenue. Miss and you get worse odds.
+- **🎁 Free hardware at every tier.** Each stage hands you free node credits —
+  2, then 3, 5, and **8 at the top tier** — so the upgrades you need are paid for.
+  They're spent automatically before your cash is.
+
+**And yes: spend it all and you run out of money.** Drop below -$2,000 and it's
+over, with a summary of how far you got.
 
 ## Generating challenges
 

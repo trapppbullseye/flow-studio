@@ -31,11 +31,14 @@ import {
   HERO_START_USERS,
   PIVOT_CHURN,
   businessById,
+  countsAsClient,
   heroTick,
   nextStage,
   pitchAmount,
   pitchOdds,
+  purchasePrice,
   revenueFor,
+  sellPrice,
   stageIndexFor,
   unlockedUpTo,
   type Business,
@@ -140,6 +143,7 @@ export default function FlowStudio() {
     running: false,
     raises: 0,
     bankrupt: false,
+    freebies: 0,
   });
   const [showPivot, setShowPivot] = useState(false);
   const [pitchMsg, setPitchMsg] = useState<string | null>(null);
@@ -350,6 +354,7 @@ export default function FlowStudio() {
           running: false,
           raises: 0,
           bankrupt: false,
+          freebies: 0,
         });
         setNodes([]);
         setEdges([]);
@@ -758,6 +763,27 @@ export default function FlowStudio() {
 
   /* ---------------- editing ---------------- */
   const addNode = (kind: NodeKind) => {
+    // zero → hero: components must be bought, or paid for with a free-node credit
+    if (mode === "hero") {
+      const price = purchasePrice(kind);
+      if (price > 0) {
+        if (hero.freebies > 0) {
+          setHero((h) => ({ ...h, freebies: h.freebies - 1 }));
+          flash(
+            `${shortName(kind)} — 🎁 free node used (${hero.freebies - 1} left)`,
+          );
+        } else if (hero.cash >= price) {
+          setHero((h) => ({ ...h, cash: h.cash - price }));
+          flash(`bought ${shortName(kind)} for ${fmtMoney(price)}`);
+        } else {
+          flash(
+            `can't afford ${shortName(kind)} — ${fmtMoney(price)}, you have ${fmtMoney(hero.cash)}`,
+          );
+          return;
+        }
+      }
+    }
+
     const r = wrapRef.current?.getBoundingClientRect();
     const c = r
       ? toCanvas(r.left + r.width / 2, r.top + r.height / 2)
@@ -790,14 +816,29 @@ export default function FlowStudio() {
     setSelection([id]);
   };
 
-  const deleteNodes = (ids: string[]) => {
+  const deleteNodes = useCallback(
+    (ids: string[]) => {
     const set = new Set(ids);
+    // zero → hero: selling up returns half of what you paid
+    if (mode === "hero") {
+      const refund = nodes
+        .filter((n) => set.has(n.id))
+        .reduce((sum, n) => sum + sellPrice(n.kind), 0);
+      if (refund > 0) {
+        setHero((h) => ({ ...h, cash: h.cash + refund }));
+        flash(
+          `sold ${ids.length} component${ids.length === 1 ? "" : "s"} for ${fmtMoney(refund)}`,
+        );
+      }
+    }
     setNodes((prev) => prev.filter((n) => !set.has(n.id)));
     setEdges((prev) => prev.filter((e) => !set.has(e.from) && !set.has(e.to)));
     setDead((d) => d.filter((x) => !set.has(x)));
     setSelection([]);
     setLinkFrom(null);
-  };
+    },
+    [mode, nodes, flash],
+  );
 
   const setEdgeMode = (id: string, mode: Edge["mode"]) =>
     setEdges((prev) => prev.map((e) => (e.id === id ? { ...e, mode } : e)));
@@ -972,7 +1013,7 @@ export default function FlowStudio() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, selection]);
+  }, [undo, redo, selection, deleteNodes]);
 
   /* ---------------- first-run tour ---------------- */
   useEffect(() => {
@@ -1017,13 +1058,12 @@ export default function FlowStudio() {
   /* ---------------- zero → hero economy ---------------- */
   const heroStage = stageIndexFor(users);
   const biz = businessById(hero.businessId);
-  const heroServing = (() => {
-    const hasSource = nodes.some((n) => CATALOG[n.kind].source);
-    const hasSink = Object.values(sim.nodes).some(
-      (sn) => !sn.entry.source && sn.inflow > 0.5,
-    );
-    return hasSource && hasSink;
-  })();
+  // you only earn once a real client — a website or a mobile app — is wired to a backend
+  const heroHasClient = nodes.some((n) => countsAsClient(n.kind));
+  const heroHasSink = Object.values(sim.nodes).some(
+    (sn) => !sn.entry.source && sn.inflow > 0.5,
+  );
+  const heroServing = heroHasClient && heroHasSink;
   const heroHealthy = heroServing && !sim.worst;
   const heroRevenue = heroServing ? revenueFor(users, biz.arpu) : 0;
   const heroNet = heroRevenue - bill.total;
@@ -1044,16 +1084,17 @@ export default function FlowStudio() {
       let month = hero.month;
       let stage = heroStage;
       let bankrupt = false;
+      let freebies = hero.freebies;
       let lastChurned = false;
       let lastGrew = false;
       const stageMsgs: string[] = [];
 
       for (let i = 0; i < n; i++) {
-        const hasSource = nodes.some((x) => CATALOG[x.kind].source);
+        const hasClient = nodes.some((x) => countsAsClient(x.kind));
         const hasSink = Object.values(sim.nodes).some(
           (sn) => !sn.entry.source && sn.inflow > 0.5,
         );
-        const serving = hasSource && hasSink;
+        const serving = hasClient && hasSink;
         const healthy = serving && !sim.worst;
 
         const r = heroTick({
@@ -1065,12 +1106,14 @@ export default function FlowStudio() {
           cost: bill.total,
           serving,
           healthy,
+          freebies,
         });
 
         u = r.users;
         cash = r.cash;
         month = r.month;
         stage = r.stageIndex;
+        freebies = r.freebies;
         lastChurned = r.churned;
         lastGrew = r.grew;
         bankrupt = r.bankrupt;
@@ -1080,6 +1123,10 @@ export default function FlowStudio() {
           stageMsgs.push(
             `${st.glyph} ${st.name}${
               r.grant ? ` · ${r.grantLabel} +${fmtMoney(r.grant)}` : ""
+            }${
+              r.granted
+                ? ` · 🎁 ${r.granted} free node${r.granted === 1 ? "" : "s"}`
+                : ""
             }`,
           );
         }
@@ -1093,6 +1140,7 @@ export default function FlowStudio() {
         cash,
         month,
         bankrupt,
+        freebies,
         running: bankrupt ? false : h.running,
       }));
       setPitchMsg(null);
@@ -1161,6 +1209,7 @@ export default function FlowStudio() {
       running: false,
       raises: 0,
       bankrupt: false,
+      freebies: 0,
     });
     setNodes([]);
     setEdges([]);
@@ -1617,11 +1666,36 @@ export default function FlowStudio() {
                     }}
                   />
                 </div>
-                <div className="mono mb-3 text-[8.5px] leading-snug text-[var(--color-muted)]">
+                <div className="mono mb-2 text-[8.5px] leading-snug text-[var(--color-muted)]">
                   {heroNet < 0
                     ? `burning ${fmtMoney(-heroNet)}/mo — spend it all and you run out`
                     : `profitable — ${fmtMoney(heroNet)}/mo goes into the bank`}
                 </div>
+
+                <div
+                  className="mono mb-3 rounded-lg border px-2 py-1.5 text-[9px] leading-snug"
+                  style={{
+                    borderColor: heroHasClient
+                      ? "var(--color-line)"
+                      : "var(--color-warn)",
+                    color: heroHasClient
+                      ? "var(--color-muted)"
+                      : "var(--color-warn)",
+                    background: "var(--color-well)",
+                  }}
+                >
+                  {heroHasClient
+                    ? `◉ earning — a client is connected, paying ${fmtMoney(heroRevenue)}/mo`
+                    : "⚠ no client connected. Wire a 🌐 Web Browser or 📱 Mobile App into your backend — nobody pays until the app is actually shipped."}
+                </div>
+
+                {hero.freebies > 0 && (
+                  <div className="mono mb-2 rounded-lg border border-[var(--color-good)] bg-[color-mix(in_srgb,var(--color-good)_10%,transparent)] px-2 py-1.5 text-[9.5px] leading-snug text-[var(--color-good)]">
+                    🎁 {hero.freebies} free node
+                    {hero.freebies === 1 ? "" : "s"} banked — your next
+                    purchases cost nothing
+                  </div>
+                )}
 
                 {heroNext && (
                   <div className="mono mb-3 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-[9px] leading-snug text-[var(--color-muted)]">
@@ -2036,6 +2110,19 @@ export default function FlowStudio() {
                   ? `unlocks at ${fmt(st.users)} users · ${st.name}`
                   : null;
               }}
+              priceOf={
+                mode === "hero"
+                  ? (k) => {
+                      const p = purchasePrice(k);
+                      return p === 0 ? "free" : fmtMoney(p);
+                    }
+                  : undefined
+              }
+              canAfford={
+                mode === "hero"
+                  ? (k) => hero.freebies > 0 || hero.cash >= purchasePrice(k)
+                  : undefined
+              }
             />
           </Section>
 

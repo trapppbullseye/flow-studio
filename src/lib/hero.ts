@@ -1,4 +1,4 @@
-import type { NodeKind } from "./design";
+import { CATALOG, COST, type NodeKind } from "./design";
 
 /* ============================================================
    ZERO → HERO — a progression, not a puzzle.
@@ -30,10 +30,34 @@ export interface HeroStage {
   blurb: string;
   /** users needed to ENTER this stage */
   users: number;
-  /** funding granted automatically the moment you enter it */
+  /** funding granted the moment you enter it */
   grant: number;
   grantLabel: string;
+  /** free node purchases handed to you on entering this stage */
+  grantNodes: number;
   unlocks: NodeKind[];
+}
+
+/* You only earn money once an actual client — a website or a mobile app —
+   is wired up to your backend. Raw traffic isn't a business. */
+export const REVENUE_CLIENTS: NodeKind[] = ["browser", "mobile"];
+
+export function countsAsClient(kind: NodeKind): boolean {
+  return REVENUE_CLIENTS.includes(kind);
+}
+
+/** one-off price to buy a node and put it on the canvas */
+export function purchasePrice(kind: NodeKind): number {
+  const e = CATALOG[kind];
+  if (e.source) return 0; // your users' own devices — not something you buy
+  const base = COST[kind].base;
+  if (base === 0) return 0; // free tier
+  return Math.max(50, Math.round(base * 3));
+}
+
+/** liquidate a node you no longer want */
+export function sellPrice(kind: NodeKind): number {
+  return Math.round(purchasePrice(kind) * 0.5);
 }
 
 export const HERO_STAGES: HeroStage[] = [
@@ -45,6 +69,7 @@ export const HERO_STAGES: HeroStage[] = [
     users: 0,
     grant: 0,
     grantLabel: "",
+    grantNodes: 0,
     unlocks: ["client", "browser", "mobile", "iot", "serverless", "objectstore"],
   },
   {
@@ -55,6 +80,7 @@ export const HERO_STAGES: HeroStage[] = [
     users: 5_000,
     grant: 2_000,
     grantLabel: "🌱 Angel cheque",
+    grantNodes: 2,
     unlocks: ["api", "database", "cache", "monitoring", "logging"],
   },
   {
@@ -65,6 +91,7 @@ export const HERO_STAGES: HeroStage[] = [
     users: 25_000,
     grant: 25_000,
     grantLabel: "💸 Seed round",
+    grantNodes: 3,
     unlocks: [
       "loadbalancer",
       "cdn",
@@ -88,6 +115,7 @@ export const HERO_STAGES: HeroStage[] = [
     users: 150_000,
     grant: 250_000,
     grantLabel: "🚀 Series A",
+    grantNodes: 5,
     unlocks: [
       "gateway",
       "waf",
@@ -119,6 +147,7 @@ export const HERO_STAGES: HeroStage[] = [
     users: 750_000,
     grant: 0,
     grantLabel: "🏆 Scale-up",
+    grantNodes: 8,
     unlocks: [
       "region",
       "lake",
@@ -298,6 +327,8 @@ export interface HeroTickInput {
   serving: boolean;
   /** no component over capacity */
   healthy: boolean;
+  /** free node purchases already banked */
+  freebies: number;
 }
 
 export interface HeroTickResult {
@@ -312,6 +343,10 @@ export interface HeroTickResult {
   stageChanged: boolean;
   grant: number;
   grantLabel: string;
+  /** free node purchases banked after this month */
+  freebies: number;
+  /** free nodes handed over this month */
+  granted: number;
   bankrupt: boolean;
 }
 
@@ -343,9 +378,11 @@ export function heroTick(inp: HeroTickInput): HeroTickResult {
   const stageChanged = stageIndex > inp.stageIndex;
   let grant = 0;
   let grantLabel = "";
+  let granted = 0;
   if (stageChanged) {
     for (let i = inp.stageIndex + 1; i <= stageIndex; i++) {
       grant += HERO_STAGES[i].grant;
+      granted += HERO_STAGES[i].grantNodes;
       if (HERO_STAGES[i].grantLabel) grantLabel = HERO_STAGES[i].grantLabel;
     }
     cash += grant;
@@ -363,6 +400,8 @@ export function heroTick(inp: HeroTickInput): HeroTickResult {
     stageChanged,
     grant,
     grantLabel,
+    freebies: inp.freebies + granted,
+    granted,
     bankrupt: cash < BANKRUPT_AT,
   };
 }

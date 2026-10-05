@@ -233,11 +233,17 @@ export function Palette({
   onAdd,
   unlocked,
   lockedHint,
+  priceOf,
+  canAfford,
 }: {
   onAdd: (k: NodeKind) => void;
   /** when provided, anything outside this set renders locked */
   unlocked?: Set<NodeKind>;
   lockedHint?: (k: NodeKind) => string | null;
+  /** optional price label shown on each button */
+  priceOf?: (k: NodeKind) => string | null;
+  /** optional gate — false dims the button and blocks the click */
+  canAfford?: (k: NodeKind) => boolean;
 }) {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
@@ -274,28 +280,40 @@ export function Palette({
               const e = CATALOG[k];
               const locked = unlocked ? !unlocked.has(k) : false;
               const hint = locked && lockedHint ? lockedHint(k) : null;
+              const price = priceOf ? priceOf(k) : null;
+              const affordable = canAfford ? canAfford(k) : true;
+              const dim = locked || !affordable;
               return (
                 <button
                   key={k}
-                  onClick={() => !locked && onAdd(k)}
-                  disabled={locked}
+                  onClick={() => !dim && onAdd(k)}
+                  disabled={dim}
                   title={
                     locked
                       ? `${e.name} — locked${hint ? ` · ${hint}` : ""}`
-                      : `${e.name} — ${e.tagline}`
+                      : !affordable
+                        ? `${e.name} — can't afford this yet${price ? ` (${price})` : ""}`
+                        : `${e.name} — ${e.tagline}${price ? ` · buy for ${price}` : ""}`
                   }
                   className={`mono flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-left text-[9.5px] transition ${
                     locked
                       ? "cursor-not-allowed border-dashed border-[var(--color-line)] bg-transparent opacity-40"
-                      : "border-[var(--color-line)] bg-[var(--color-well)] hover:border-[var(--color-accent)] hover:bg-[var(--color-panel2)]"
+                      : !affordable
+                        ? "cursor-not-allowed border-[var(--color-line)] bg-[var(--color-well)] opacity-45"
+                        : "border-[var(--color-line)] bg-[var(--color-well)] hover:border-[var(--color-accent)] hover:bg-[var(--color-panel2)]"
                   }`}
                 >
                   <span
-                    style={{ color: locked ? "var(--color-muted)" : e.color }}
+                    style={{ color: dim ? "var(--color-muted)" : e.color }}
                   >
                     {locked ? "🔒" : e.glyph}
                   </span>
-                  <span className="truncate">{shortName(k)}</span>
+                  <span className="min-w-0 flex-1 truncate">{shortName(k)}</span>
+                  {price && !locked && (
+                    <span className="shrink-0 text-[8px] text-[var(--color-muted)]">
+                      {price}
+                    </span>
+                  )}
                 </button>
               );
             })}
