@@ -5,19 +5,28 @@ import {
   CATALOG,
   PALETTE_GROUPS,
   fmt,
+  fmtMoney,
   type NodeKind,
+  type NodeCost,
   type SimNode,
 } from "@/lib/design";
 import { NODE_W, NODE_H } from "./NodeCard";
 
 interface Props {
   sim: SimNode | null;
+  cost: NodeCost | null;
   onDelete: () => void;
   onCapacity: (v: number) => void;
   onClose: () => void;
 }
 
-export default function Inspector({ sim, onDelete, onCapacity, onClose }: Props) {
+export default function Inspector({
+  sim,
+  cost,
+  onDelete,
+  onCapacity,
+  onClose,
+}: Props) {
   if (!sim) {
     return (
       <div className="panel rounded-xl p-4 text-[12px] leading-relaxed text-[var(--color-muted)]">
@@ -115,6 +124,24 @@ export default function Inspector({ sim, onDelete, onCapacity, onClose }: Props)
         </div>
       )}
 
+      {cost && (
+        <div className="mb-3 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] p-2.5">
+          <div className="mono mb-2 flex items-center justify-between text-[9px] uppercase tracking-widest">
+            <span className="text-[var(--color-muted)]">monthly cost</span>
+            <span className="text-[12px] font-bold text-[var(--color-good)]">
+              {fmtMoney(cost.total)}
+            </span>
+          </div>
+          <div className="mono flex flex-col gap-1 text-[9.5px] text-[var(--color-muted)]">
+            <Row
+              label={cost.instances > 1 ? `fixed · ${cost.instances} instances` : "fixed"}
+              value={fmtMoney(cost.fixed)}
+            />
+            <Row label="per-request" value={fmtMoney(cost.variable)} />
+          </div>
+        </div>
+      )}
+
       <button
         onClick={onDelete}
         className="mono w-full rounded-lg border border-[color-mix(in_srgb,var(--color-bad)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-bad)_8%,transparent)] py-1.5 text-[10.5px] text-[var(--color-bad)] transition hover:bg-[color-mix(in_srgb,var(--color-bad)_14%,transparent)]"
@@ -135,6 +162,17 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div className="mono text-[12px] font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 font-semibold text-[var(--color-ink)]">
+        {value}
+      </span>
     </div>
   );
 }

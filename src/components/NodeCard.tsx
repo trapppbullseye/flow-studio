@@ -1,7 +1,7 @@
 "use client";
 
-import type { SimNode, FlowNode } from "@/lib/design";
-import { CATALOG, fmt } from "@/lib/design";
+import type { SimNode, FlowNode, NodeCost } from "@/lib/design";
+import { CATALOG, fmt, fmtMoney } from "@/lib/design";
 
 export const NODE_W = 172;
 export const NODE_H = 104;
@@ -9,6 +9,8 @@ export const NODE_H = 104;
 interface Props {
   n: FlowNode;
   sim: SimNode;
+  cost: NodeCost;
+  showCost: boolean;
   selected: boolean;
   linkSource: boolean;
   linkTarget: boolean;
@@ -21,6 +23,8 @@ interface Props {
 export default function NodeCard({
   n,
   sim,
+  cost,
+  showCost,
   selected,
   linkSource,
   linkTarget,
@@ -75,8 +79,15 @@ export default function NodeCard({
           <div className="truncate text-[12.5px] font-semibold leading-tight">
             {entry.name}
           </div>
-          <div className="mono truncate text-[9px] uppercase tracking-wide text-[var(--color-muted)]">
-            {entry.tagline}
+          <div
+            className="mono truncate text-[9px] uppercase tracking-wide"
+            style={{
+              color: showCost ? "var(--color-good)" : "var(--color-muted)",
+            }}
+          >
+            {showCost
+              ? `${fmtMoney(cost.total)}/mo${cost.instances > 1 ? ` · ×${cost.instances}` : ""}`
+              : entry.tagline}
           </div>
         </div>
         {sim.overloaded && (

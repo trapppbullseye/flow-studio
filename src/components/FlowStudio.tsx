@@ -4,10 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CATALOG,
   SCENARIOS,
+  billOf,
+  costOf,
   fmt,
+  fmtMoney,
   fmtUsers,
   newId,
   simulate,
+  smartStack,
   type Edge,
   type FlowNode,
   type NodeKind,
@@ -41,6 +45,12 @@ export default function FlowStudio() {
   const [edges, setEdges] = useState<Edge[]>(SCENARIOS[0].edges);
   const [users, setUsers] = useState(SCENARIOS[0].users);
   const [selection, setSelection] = useState<string[]>([]);
+  const [meta, setMeta] = useState({
+    index: SCENARIOS[0].index,
+    title: SCENARIOS[0].title,
+    blurb: SCENARIOS[0].blurb,
+  });
+  const [showCost, setShowCost] = useState(false);
   const [linkMode, setLinkMode] = useState(false);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [wireFrom, setWireFrom] = useState<string | null>(null);
@@ -93,7 +103,7 @@ export default function FlowStudio() {
   } | null>(null);
 
   const sim = useMemo(() => simulate(nodes, edges, users), [nodes, edges, users]);
-  const scenario = SCENARIOS.find((s) => s.id === scenarioId)!;
+  const bill = useMemo(() => billOf(sim), [sim]);
   const selectedId = selection.length === 1 ? selection[0] : null;
 
   const fitTo = useCallback((ns: FlowNode[]) => {
@@ -130,6 +140,7 @@ export default function FlowStudio() {
     (id: string) => {
       const s = SCENARIOS.find((x) => x.id === id)!;
       setScenarioId(id);
+      setMeta({ index: s.index, title: s.title, blurb: s.blurb });
       setNodes(s.nodes.map((n) => ({ ...n })));
       setEdges(s.edges.map((e) => ({ ...e })));
       setUsers(s.users);
@@ -141,6 +152,36 @@ export default function FlowStudio() {
     },
     [fitTo],
   );
+
+  /** replace the canvas with an opinionated, auto-sized scalable stack */
+  const buildSmartStack = useCallback(() => {
+    const { nodes: ns, edges: es } = smartStack(users);
+    setScenarioId("");
+    setMeta({
+      index: "★",
+      title: "SMART STACK",
+      blurb:
+        "A scalable default — edge, LB, stateless APIs, cache, replicas, queue. Every layer sized to hold.",
+    });
+    setNodes(ns);
+    setEdges(es);
+    setSelection([]);
+    setLinkFrom(null);
+    setLinkMode(false);
+    setWireFrom(null);
+    fitTo(ns);
+  }, [users, fitTo]);
+
+  /** bump every bottleneck so it comfortably clears its current load */
+  const autoScale = useCallback(() => {
+    setNodes((prev) =>
+      prev.map((n) => {
+        const sn = sim.nodes[n.id];
+        if (!sn || sn.capacity === Infinity || !sn.overloaded) return n;
+        return { ...n, capacity: Math.ceil((sn.inflow * 1.3) / 100) * 100 };
+      }),
+    );
+  }, [sim]);
 
   /* ---------------- pointer plumbing ---------------- */
   const toCanvas = useCallback((clientX: number, clientY: number) => {
@@ -446,6 +487,36 @@ export default function FlowStudio() {
             🔗 click-link {linkMode ? "on" : "off"}
           </button>
           <button
+            onClick={buildSmartStack}
+            title="replace the canvas with a scalable default stack"
+            className="rounded-lg border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] px-3 py-1.5 text-[var(--color-accent)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]"
+          >
+            ⚡ smart stack
+          </button>
+          <button
+            onClick={autoScale}
+            disabled={!sim.worst}
+            title="auto-scale every bottleneck so it clears its load"
+            className={`rounded-lg border px-3 py-1.5 transition ${
+              sim.worst
+                ? "border-[var(--color-bad-border)] bg-[color-mix(in_srgb,var(--color-bad)_10%,transparent)] text-[var(--color-bad)] hover:bg-[color-mix(in_srgb,var(--color-bad)_18%,transparent)]"
+                : "border-[var(--color-line)] bg-[var(--color-well)] text-[var(--color-muted)] opacity-50"
+            }`}
+          >
+            🛠 auto-scale
+          </button>
+          <button
+            onClick={() => setShowCost((v) => !v)}
+            title="show the monthly cost on each node"
+            className={`rounded-lg border px-3 py-1.5 transition ${
+              showCost
+                ? "border-[var(--color-good)] bg-[color-mix(in_srgb,var(--color-good)_12%,transparent)] text-[var(--color-good)]"
+                : "border-[var(--color-line)] bg-[var(--color-well)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            }`}
+          >
+            $ cost
+          </button>
+          <button
             onClick={fit}
             className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5 text-[var(--color-muted)] hover:text-[var(--color-ink)]"
           >
@@ -466,10 +537,10 @@ export default function FlowStudio() {
         <aside className="z-10 flex w-[300px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-[var(--color-line)] bg-[var(--color-panel)] p-3">
           <div className="panel fade-in rounded-xl p-3">
             <div className="mono text-[10px] uppercase tracking-widest text-[var(--color-accent)]">
-              {scenario.index} / {scenario.title}
+              {meta.index} / {meta.title}
             </div>
             <div className="mt-1 text-[14px] font-semibold leading-snug">
-              {scenario.blurb}
+              {meta.blurb}
             </div>
           </div>
 
@@ -515,6 +586,9 @@ export default function FlowStudio() {
           ) : (
             <Inspector
               sim={selectedId ? sim.nodes[selectedId] : null}
+              cost={
+                selectedId ? costOf(sim.nodes[selectedId]) : null
+              }
               onDelete={() => selectedId && deleteNodes([selectedId])}
               onCapacity={(v) =>
                 setNodes((prev) =>
@@ -567,6 +641,53 @@ export default function FlowStudio() {
               </div>
             </Section>
           )}
+
+          <Section title="monthly bill">
+            <div className="panel rounded-xl p-3">
+              <div className="mb-2 flex items-baseline justify-between">
+                <span className="mono text-[9px] uppercase tracking-widest text-[var(--color-muted)]">
+                  total / month
+                </span>
+                <span className="mono text-[16px] font-extrabold text-[var(--color-good)]">
+                  {fmtMoney(bill.total)}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                {bill.rows
+                  .filter((r) => r.cost.total > 0.5)
+                  .slice(0, 5)
+                  .map((r) => {
+                    const pct = bill.total ? (r.cost.total / bill.total) * 100 : 0;
+                    return (
+                      <div key={r.id}>
+                        <div className="mono mb-0.5 flex items-center justify-between text-[9.5px]">
+                          <span className="truncate text-[var(--color-muted)]">
+                            {r.name}
+                          </span>
+                          <span className="shrink-0 font-semibold text-[var(--color-ink)]">
+                            {fmtMoney(r.cost.total)}
+                          </span>
+                        </div>
+                        <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--color-well)]">
+                          <div
+                            className="h-full rounded-full"
+                            style={{ width: `${pct}%`, background: r.color }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                {bill.total === 0 && (
+                  <div className="mono text-[9.5px] text-[var(--color-muted)]">
+                    nothing running — $0/mo
+                  </div>
+                )}
+              </div>
+              <div className="mono mt-2 text-[8px] leading-relaxed text-[var(--color-muted)]">
+                rough ballpark · realistic pricing model, not a quote
+              </div>
+            </div>
+          </Section>
 
           <Section title="legend">
             <div className="mono flex flex-col gap-1 text-[9.5px] text-[var(--color-muted)]">
@@ -711,6 +832,8 @@ export default function FlowStudio() {
                 key={n.id}
                 n={n}
                 sim={sim.nodes[n.id]}
+                cost={costOf(sim.nodes[n.id])}
+                showCost={showCost}
                 selected={selection.includes(n.id)}
                 linkSource={linkFrom === n.id}
                 linkTarget={linkMode && !!linkFrom && linkFrom !== n.id}
@@ -752,6 +875,9 @@ export default function FlowStudio() {
             <span>· {nodes.length} components</span>
             <span>· {edges.length} links</span>
             <span>· {fmt(sim.rps)} req/s in</span>
+            <span className="text-[var(--color-good)]">
+              · {fmtMoney(bill.total)}/mo
+            </span>
             <span className="ml-auto">
               bottleneck:{" "}
               <span

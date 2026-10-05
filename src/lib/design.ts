@@ -997,3 +997,180 @@ export const fmtUsers = (n: number) =>
 
 export const newId = (kind: NodeKind) =>
   `${kind}-${Math.random().toString(36).slice(2, 6)}`;
+
+/* ============================================================
+   COST MODEL — rough monthly cloud bill per component
+   base   : $/month per instance (amortised managed service / VM)
+   perM   : $ per 1,000,000 requests handled
+   ============================================================ */
+export interface Price {
+  base: number;
+  perM: number;
+}
+
+export const COST: Record<NodeKind, Price> = {
+  client: { base: 0, perM: 0 },
+  browser: { base: 0, perM: 0 },
+  mobile: { base: 0, perM: 0 },
+  iot: { base: 0, perM: 0 },
+  dns: { base: 0, perM: 0.4 },
+  cdn: { base: 10, perM: 0.6 },
+  waf: { base: 30, perM: 0.6 },
+  proxy: { base: 20, perM: 0.02 },
+  gateway: { base: 40, perM: 0.9 },
+  loadbalancer: { base: 25, perM: 0.008 },
+  api: { base: 35, perM: 0.4 },
+  serverless: { base: 0, perM: 0.2 },
+  container: { base: 30, perM: 0.3 },
+  orchestrator: { base: 75, perM: 0.01 },
+  microservice: { base: 30, perM: 0.35 },
+  graphql: { base: 45, perM: 0.5 },
+  bff: { base: 35, perM: 0.4 },
+  auth: { base: 25, perM: 0.1 },
+  ratelimit: { base: 15, perM: 0.02 },
+  circuit: { base: 10, perM: 0.01 },
+  scheduler: { base: 10, perM: 0.01 },
+  cache: { base: 45, perM: 0.05 },
+  database: { base: 220, perM: 0.25 },
+  nosql: { base: 120, perM: 0.15 },
+  warehouse: { base: 500, perM: 1.2 },
+  lake: { base: 60, perM: 0.02 },
+  objectstore: { base: 25, perM: 0.02 },
+  search: { base: 180, perM: 0.5 },
+  timeseries: { base: 90, perM: 0.3 },
+  vectordb: { base: 150, perM: 0.4 },
+  replica: { base: 160, perM: 0.1 },
+  shard: { base: 150, perM: 0.2 },
+  config: { base: 20, perM: 0.01 },
+  queue: { base: 30, perM: 0.4 },
+  pubsub: { base: 30, perM: 0.5 },
+  eventbus: { base: 40, perM: 0.45 },
+  stream: { base: 120, perM: 0.6 },
+  worker: { base: 30, perM: 0.2 },
+  dlq: { base: 10, perM: 0.05 },
+  model: { base: 0, perM: 400 },
+  embedding: { base: 0, perM: 120 },
+  rag: { base: 50, perM: 300 },
+  gpu: { base: 3000, perM: 60 },
+  monitoring: { base: 60, perM: 0.2 },
+  logging: { base: 80, perM: 0.35 },
+  tracing: { base: 70, perM: 0.3 },
+  registry: { base: 30, perM: 0.02 },
+  secrets: { base: 40, perM: 0.01 },
+  notify: { base: 20, perM: 0.6 },
+  payment: { base: 0, perM: 2.9 },
+};
+
+export const SECONDS_PER_MONTH = 2_592_000;
+
+export interface NodeCost {
+  instances: number;
+  fixed: number;
+  variable: number;
+  total: number;
+}
+
+/**
+ * Cost = units × base + traffic × perM.
+ * A "unit" is one catalog-sized instance. You pay for whichever is greater:
+ * what the load demands (inflow / natural capacity) or what you provisioned
+ * (your capacity override / natural capacity). So scaling up costs more, and
+ * adding traffic costs more — both directions are monotonic.
+ */
+export function costOf(sn: SimNode): NodeCost {
+  const p = COST[sn.node.kind];
+  const natural = sn.entry.capacity;
+  let units = 0;
+  if (!sn.entry.source && natural !== Infinity && natural > 0) {
+    units = Math.max(1, sn.inflow / natural, sn.capacity / natural);
+  }
+  const instances = Math.ceil(units);
+  const fixed = p.base * units;
+  const monthlyReq = sn.inflow * SECONDS_PER_MONTH;
+  const variable = (monthlyReq / 1_000_000) * p.perM;
+  return { instances, fixed, variable, total: fixed + variable };
+}
+
+export interface Bill {
+  total: number;
+  rows: { id: string; name: string; color: string; cost: NodeCost }[];
+}
+
+export function billOf(sim: Sim): Bill {
+  let total = 0;
+  const rows = Object.values(sim.nodes).map((sn) => {
+    const cost = costOf(sn);
+    total += cost.total;
+    return {
+      id: sn.node.id,
+      name: sn.entry.name,
+      color: sn.entry.color,
+      cost,
+    };
+  });
+  rows.sort((a, b) => b.cost.total - a.cost.total);
+  return { total, rows };
+}
+
+export const fmtMoney = (n: number) => {
+  if (!isFinite(n)) return "∞";
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(n >= 10_000 ? 1 : 2)}k`;
+  return `$${n.toFixed(n < 100 ? 2 : 0)}`;
+};
+
+/* ============================================================
+   SMART STACK — an opinionated, scalable default architecture.
+   Built to hold: after wiring, each component is auto-sized so
+   nothing sits over capacity at the given user count.
+   ============================================================ */
+export function smartStack(users: number): {
+  nodes: FlowNode[];
+  edges: Edge[];
+} {
+  const C = [60, 340, 620, 900, 1180];
+  const nodes: FlowNode[] = [
+    N("u", "client", C[0], 430),
+    N("dns", "dns", C[1], 90),
+    N("waf", "waf", C[1], 330),
+    N("cdn", "cdn", C[1], 570),
+    N("lb", "loadbalancer", C[2], 330),
+    N("api1", "api", C[3], 210),
+    N("api2", "api", C[3], 450),
+    N("cache", "cache", C[4], 90),
+    N("db", "database", C[4], 330),
+    N("r1", "replica", C[4], 570),
+    N("r2", "replica", C[4], 810),
+    N("q", "queue", C[3], 700),
+    N("w1", "worker", C[4], 1050),
+    N("mon", "monitoring", C[2], 700),
+  ];
+  const edges: Edge[] = [
+    E("u", "dns", "read", 1),
+    E("u", "waf", "read", 1),
+    E("u", "cdn", "read", 1),
+    E("dns", "lb", "read", 1),
+    E("waf", "lb", "read", 1),
+    E("cdn", "lb", "read", 0.35),
+    E("lb", "api1", "read", 1),
+    E("lb", "api2", "read", 1),
+    E("api1", "cache", "read", 1),
+    E("api1", "r1", "read", 1),
+    E("api1", "db", "write", 0.15),
+    E("api1", "q", "async", 0.3),
+    E("api2", "cache", "read", 1),
+    E("api2", "r2", "read", 1),
+    E("api2", "db", "write", 0.15),
+    E("api2", "q", "async", 0.3),
+    E("q", "w1", "async", 1),
+    E("api1", "mon", "read", 0.1),
+  ];
+
+  const s = simulate(nodes, edges, users);
+  const sized = nodes.map((n) => {
+    const sn = s.nodes[n.id];
+    if (!sn || sn.capacity === Infinity || !sn.overloaded) return n;
+    return { ...n, capacity: Math.ceil((sn.inflow * 1.3) / 100) * 100 };
+  });
+  return { nodes: sized, edges };
+}
