@@ -12,8 +12,10 @@ interface Props {
   selected: boolean;
   linkSource: boolean;
   linkTarget: boolean;
+  wireSource: boolean;
+  wireTarget: boolean;
   onPointerDown: (e: React.PointerEvent, id: string) => void;
-  onSelect: (id: string) => void;
+  onPortDown: (e: React.PointerEvent, id: string) => void;
 }
 
 export default function NodeCard({
@@ -22,17 +24,19 @@ export default function NodeCard({
   selected,
   linkSource,
   linkTarget,
+  wireSource,
+  wireTarget,
   onPointerDown,
-  onSelect,
+  onPortDown,
 }: Props) {
   const entry = CATALOG[n.kind];
   const rawPct = sim.capacity === Infinity ? 0 : Math.round(sim.load * 100);
   const barPct = Math.min(100, rawPct);
   const isSource = !!entry.source;
 
-  const ring = linkSource
+  const ring = wireSource || linkSource
     ? "var(--color-accent)"
-    : linkTarget
+    : wireTarget || linkTarget
       ? "var(--color-good)"
       : selected
         ? entry.color
@@ -55,10 +59,6 @@ export default function NodeCard({
         cursor: "grab",
       }}
       onPointerDown={(e) => onPointerDown(e, n.id)}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect(n.id);
-      }}
     >
       {/* header */}
       <div className="flex items-start gap-2 px-3 pt-2.5">
@@ -114,21 +114,26 @@ export default function NodeCard({
         </div>
       </div>
 
-      {/* ports */}
-      {!isSource && (
-        <span
-          className="absolute -left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-[var(--color-bg)]"
-          style={{ background: entry.color }}
-        />
-      )}
-      {sim.capacity !== Infinity && (
-        <span
-          className="absolute -right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-[var(--color-bg)]"
-          style={{
-            background: sim.overloaded ? "var(--color-bad)" : entry.color,
-          }}
-        />
-      )}
+      {/* input port */}
+      <span
+        className="absolute -left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 border-[var(--color-bg)]"
+        style={{ background: entry.color, opacity: isSource ? 0.4 : 1 }}
+        title="input"
+      />
+
+      {/* output port — drag from here to connect */}
+      <span
+        onPointerDown={(e) => onPortDown(e, n.id)}
+        className="node-port absolute -right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-[var(--color-bg)] transition-transform hover:scale-150"
+        style={{
+          background: wireSource
+            ? "var(--color-accent)"
+            : sim.overloaded
+              ? "var(--color-bad)"
+              : entry.color,
+        }}
+        title="drag to connect"
+      />
     </div>
   );
 }

@@ -21,14 +21,36 @@ const EDGE_COLOR: Record<Edge["mode"], string> = {
   async: "var(--edge-async)",
 };
 
+const hitTest = (p: { x: number; y: number }, ns: FlowNode[]) => {
+  for (let i = ns.length - 1; i >= 0; i--) {
+    const n = ns[i];
+    if (
+      p.x >= n.x &&
+      p.x <= n.x + NODE_W &&
+      p.y >= n.y &&
+      p.y <= n.y + NODE_H
+    )
+      return n.id;
+  }
+  return null;
+};
+
 export default function FlowStudio() {
   const [scenarioId, setScenarioId] = useState(SCENARIOS[0].id);
   const [nodes, setNodes] = useState<FlowNode[]>(SCENARIOS[0].nodes);
   const [edges, setEdges] = useState<Edge[]>(SCENARIOS[0].edges);
   const [users, setUsers] = useState(SCENARIOS[0].users);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selection, setSelection] = useState<string[]>([]);
   const [linkMode, setLinkMode] = useState(false);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
+  const [wireFrom, setWireFrom] = useState<string | null>(null);
+  const [wireHover, setWireHover] = useState<string | null>(null);
+  const [marquee, setMarquee] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
   const [pan, setPan] = useState({ x: 30, y: 20 });
   const [zoom, setZoom] = useState(0.9);
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
@@ -38,6 +60,9 @@ export default function FlowStudio() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef(zoom);
   const panRef = useRef(pan);
+  const nodesRef = useRef(nodes);
+  const wiring = useRef<string | null>(null);
+  const marqueeStart = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     zoomRef.current = zoom;
@@ -45,16 +70,20 @@ export default function FlowStudio() {
   }, [zoom, pan]);
 
   useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
   const drag = useRef<{
-    id: string;
+    ids: string[];
+    origins: Record<string, { x: number; y: number }>;
     startX: number;
     startY: number;
-    origX: number;
-    origY: number;
     moved: boolean;
+    collapseTo: string | null;
   } | null>(null);
   const panDrag = useRef<{
     startX: number;
@@ -65,6 +94,7 @@ export default function FlowStudio() {
 
   const sim = useMemo(() => simulate(nodes, edges, users), [nodes, edges, users]);
   const scenario = SCENARIOS.find((s) => s.id === scenarioId)!;
+  const selectedId = selection.length === 1 ? selection[0] : null;
 
   const fitTo = useCallback((ns: FlowNode[]) => {
     const r = wrapRef.current?.getBoundingClientRect();
@@ -103,9 +133,10 @@ export default function FlowStudio() {
       setNodes(s.nodes.map((n) => ({ ...n })));
       setEdges(s.edges.map((e) => ({ ...e })));
       setUsers(s.users);
-      setSelected(null);
+      setSelection([]);
       setLinkFrom(null);
       setLinkMode(false);
+      setWireFrom(null);
       fitTo(s.nodes);
     },
     [fitTo],
@@ -123,6 +154,9 @@ export default function FlowStudio() {
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
+      const c = toCanvas(e.clientX, e.clientY);
+      setGhost(c);
+
       if (drag.current) {
         const d = drag.current;
         const dx = (e.clientX - d.startX) / zoomRef.current;
@@ -130,7 +164,13 @@ export default function FlowStudio() {
         if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true;
         setNodes((prev) =>
           prev.map((n) =>
-            n.id === d.id ? { ...n, x: d.origX + dx, y: d.origY + dy } : n,
+            d.origins[n.id]
+              ? {
+                  ...n,
+                  x: d.origins[n.id].x + dx,
+                  y: d.origins[n.id].y + dy,
+                }
+              : n,
           ),
         );
       } else if (panDrag.current) {
@@ -139,16 +179,74 @@ export default function FlowStudio() {
           x: p.ox + (e.clientX - p.startX),
           y: p.oy + (e.clientY - p.startY),
         });
+      } else if (marqueeStart.current) {
+        const s = marqueeStart.current;
+        setMarquee({
+          x: Math.min(s.x, c.x),
+          y: Math.min(s.y, c.y),
+          w: Math.abs(c.x - s.x),
+          h: Math.abs(c.y - s.y),
+        });
       }
+
+      if (wiring.current) {
+        const t = hitTest(c, nodesRef.current);
+        setWireHover(t && t !== wiring.current ? t : null);
+      }
+    };
+
+    const up = (e: PointerEvent) => {
       const c = toCanvas(e.clientX, e.clientY);
-      setGhost(c);
+
+      if (drag.current) {
+        const d = drag.current;
+        if (!d.moved && d.collapseTo) setSelection([d.collapseTo]);
+        drag.current = null;
+      }
+
+      if (panDrag.current) {
+        panDrag.current = null;
+        setPanning(false);
+      }
+
+      if (marqueeStart.current) {
+        const s = marqueeStart.current;
+        marqueeStart.current = null;
+        const rx = Math.min(s.x, c.x);
+        const ry = Math.min(s.y, c.y);
+        const rw = Math.abs(c.x - s.x);
+        const rh = Math.abs(c.y - s.y);
+        if (rw > 6 || rh > 6) {
+          const ids = nodesRef.current
+            .filter(
+              (n) =>
+                n.x < rx + rw &&
+                n.x + NODE_W > rx &&
+                n.y < ry + rh &&
+                n.y + NODE_H > ry,
+            )
+            .map((n) => n.id);
+          setSelection((prev) => Array.from(new Set([...prev, ...ids])));
+        }
+        setMarquee(null);
+      }
+
+      if (wiring.current) {
+        const from = wiring.current;
+        const t = hitTest(c, nodesRef.current);
+        if (t && t !== from) {
+          setEdges((prev) =>
+            prev.some((x) => x.from === from && x.to === t)
+              ? prev
+              : [...prev, { id: `${from}->${t}`, from, to: t, mode: "read" }],
+          );
+        }
+        wiring.current = null;
+        setWireFrom(null);
+        setWireHover(null);
+      }
     };
-    const up = () => {
-      if (drag.current && !drag.current.moved) setSelected(drag.current.id);
-      drag.current = null;
-      panDrag.current = null;
-      setPanning(false);
-    };
+
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     return () => {
@@ -159,30 +257,57 @@ export default function FlowStudio() {
 
   const onNodePointerDown = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
+
     if (linkMode) {
       if (!linkFrom) {
         setLinkFrom(id);
       } else if (linkFrom !== id) {
-        const dupe = edges.some((x) => x.from === linkFrom && x.to === id);
-        if (!dupe) {
-          setEdges((prev) => [
-            ...prev,
-            { id: `${linkFrom}->${id}`, from: linkFrom, to: id, mode: "read" },
-          ]);
-        }
+        setEdges((prev) =>
+          prev.some((x) => x.from === linkFrom && x.to === id)
+            ? prev
+            : [
+                ...prev,
+                { id: `${linkFrom}->${id}`, from: linkFrom, to: id, mode: "read" },
+              ],
+        );
         setLinkFrom(null);
       }
       return;
     }
-    const n = nodes.find((x) => x.id === id)!;
+
+    if (e.shiftKey) {
+      setSelection((prev) =>
+        prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+      );
+      return;
+    }
+
+    const already = selection.includes(id);
+    const ids = already ? selection : [id];
+    if (!already) setSelection([id]);
+
+    const origins: Record<string, { x: number; y: number }> = {};
+    for (const nid of ids) {
+      const n = nodes.find((x) => x.id === nid);
+      if (n) origins[nid] = { x: n.x, y: n.y };
+    }
+
     drag.current = {
-      id,
+      ids,
+      origins,
       startX: e.clientX,
       startY: e.clientY,
-      origX: n.x,
-      origY: n.y,
       moved: false,
+      collapseTo: already && selection.length > 1 ? id : null,
     };
+  };
+
+  const onPortDown = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    wiring.current = id;
+    setWireFrom(id);
+    setWireHover(null);
   };
 
   const onBgPointerDown = (e: React.PointerEvent) => {
@@ -191,7 +316,16 @@ export default function FlowStudio() {
       setLinkFrom(null);
       return;
     }
-    setSelected(null);
+    if (wiring.current) return;
+
+    if (e.shiftKey) {
+      const p = toCanvas(e.clientX, e.clientY);
+      marqueeStart.current = p;
+      setMarquee({ x: p.x, y: p.y, w: 0, h: 0 });
+      return;
+    }
+
+    setSelection([]);
     panDrag.current = {
       startX: e.clientX,
       startY: e.clientY,
@@ -230,13 +364,14 @@ export default function FlowStudio() {
         y: c.y - NODE_H / 2 + Math.random() * 40,
       },
     ]);
-    setSelected(id);
+    setSelection([id]);
   };
 
-  const deleteNode = (id: string) => {
-    setNodes((prev) => prev.filter((n) => n.id !== id));
-    setEdges((prev) => prev.filter((e) => e.from !== id && e.to !== id));
-    setSelected(null);
+  const deleteNodes = (ids: string[]) => {
+    const set = new Set(ids);
+    setNodes((prev) => prev.filter((n) => !set.has(n.id)));
+    setEdges((prev) => prev.filter((e) => !set.has(e.from) && !set.has(e.to)));
+    setSelection([]);
     setLinkFrom(null);
   };
 
@@ -246,8 +381,24 @@ export default function FlowStudio() {
   const fit = () => fitTo(nodes);
 
   /* ---------------- render ---------------- */
-  const ghostStart = linkFrom ? sim.nodes[linkFrom] : null;
+  const previewId = wireFrom ?? linkFrom;
+  const previewNode = previewId
+    ? nodes.find((n) => n.id === previewId)
+    : undefined;
+  const hoverNode = wireHover
+    ? nodes.find((n) => n.id === wireHover)
+    : undefined;
   const hasTargets = nodes.some((n) => !CATALOG[n.kind].source);
+
+  let previewPath: string | null = null;
+  if (previewNode && (wireFrom || (linkFrom && ghost))) {
+    const x1 = previewNode.x + NODE_W;
+    const y1 = previewNode.y + NODE_H / 2;
+    const x2 = hoverNode ? hoverNode.x : (ghost?.x ?? x1);
+    const y2 = hoverNode ? hoverNode.y + NODE_H / 2 : (ghost?.y ?? y1);
+    const mx = (x1 + x2) / 2;
+    previewPath = `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+  }
 
   return (
     <div className="flex h-screen w-full flex-col overflow-hidden">
@@ -292,7 +443,7 @@ export default function FlowStudio() {
                 : "border-[var(--color-line)] bg-[var(--color-well)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
             }`}
           >
-            🔗 link {linkMode ? "on" : "off"}
+            🔗 click-link {linkMode ? "on" : "off"}
           </button>
           <button
             onClick={fit}
@@ -313,7 +464,6 @@ export default function FlowStudio() {
       <div className="flex min-h-0 flex-1">
         {/* ============ SIDEBAR ============ */}
         <aside className="z-10 flex w-[300px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-[var(--color-line)] bg-[var(--color-panel)] p-3">
-          {/* scenario */}
           <div className="panel fade-in rounded-xl p-3">
             <div className="mono text-[10px] uppercase tracking-widest text-[var(--color-accent)]">
               {scenario.index} / {scenario.title}
@@ -344,16 +494,38 @@ export default function FlowStudio() {
             </div>
           </Section>
 
-          <Inspector
-            sim={selected ? sim.nodes[selected] : null}
-            onDelete={() => selected && deleteNode(selected)}
-            onCapacity={(v) =>
-              setNodes((prev) =>
-                prev.map((n) => (n.id === selected ? { ...n, capacity: v } : n)),
-              )
-            }
-            onClose={() => setSelected(null)}
-          />
+          {selection.length > 1 ? (
+            <div className="panel fade-in rounded-xl p-4">
+              <div className="mono mb-2 text-[10px] uppercase tracking-widest text-[var(--color-accent)]">
+                multi-select
+              </div>
+              <div className="mb-3 text-[12px] text-[var(--color-muted)]">
+                <span className="font-bold text-[var(--color-ink)]">
+                  {selection.length}
+                </span>{" "}
+                components selected — drag any of them to move the whole group.
+              </div>
+              <button
+                onClick={() => deleteNodes(selection)}
+                className="mono w-full rounded-lg border border-[color-mix(in_srgb,var(--color-bad)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-bad)_8%,transparent)] py-1.5 text-[10.5px] text-[var(--color-bad)] transition hover:bg-[color-mix(in_srgb,var(--color-bad)_14%,transparent)]"
+              >
+                delete {selection.length} components
+              </button>
+            </div>
+          ) : (
+            <Inspector
+              sim={selectedId ? sim.nodes[selectedId] : null}
+              onDelete={() => selectedId && deleteNodes([selectedId])}
+              onCapacity={(v) =>
+                setNodes((prev) =>
+                  prev.map((n) =>
+                    n.id === selectedId ? { ...n, capacity: v } : n,
+                  ),
+                )
+              }
+              onClose={() => setSelection([])}
+            />
+          )}
 
           <Section title="add component">
             <Palette onAdd={addNode} />
@@ -407,8 +579,10 @@ export default function FlowStudio() {
           </Section>
 
           <div className="mono px-1 pb-2 text-[8.5px] leading-relaxed text-[var(--color-muted)]">
-            drag nodes · scroll to zoom · drag bg to pan · 🔗 then click two
-            nodes to connect
+            drag the <span className="text-[var(--color-accent)]">●</span> port
+            of a node onto another node to connect · drag a node to move it ·
+            shift-click or shift-drag to select many · scroll to zoom · drag bg
+            to pan
           </div>
         </aside>
 
@@ -419,7 +593,11 @@ export default function FlowStudio() {
           onPointerDown={onBgPointerDown}
           onWheel={onWheel}
           style={{
-            cursor: panning ? "grabbing" : linkMode ? "crosshair" : "default",
+            cursor: panning
+              ? "grabbing"
+              : linkMode
+                ? "crosshair"
+                : "default",
           }}
         >
           <div
@@ -428,7 +606,6 @@ export default function FlowStudio() {
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
             }}
           >
-            {/* edges */}
             <svg
               className="pointer-events-none absolute left-0 top-0 overflow-visible"
               width={1}
@@ -493,18 +670,23 @@ export default function FlowStudio() {
                       className={`edge-flow ${bad ? "fast" : ""}`}
                       markerEnd={`url(#arrow-${bad ? "bad" : e.mode})`}
                     />
-                    <circle cx={dotx} cy={doty} r={3.2} fill={col} className="pulse-dot" />
+                    <circle
+                      cx={dotx}
+                      cy={doty}
+                      r={3.2}
+                      fill={col}
+                      className="pulse-dot"
+                    />
                   </g>
                 );
               })}
 
-              {/* ghost link line */}
-              {linkFrom && ghostStart && ghost && (
+              {previewPath && (
                 <path
-                  d={`M ${ghostStart.node.x + NODE_W} ${
-                    ghostStart.node.y + NODE_H / 2
-                  } L ${ghost.x} ${ghost.y}`}
-                  stroke="var(--color-accent)"
+                  d={previewPath}
+                  stroke={
+                    hoverNode ? "var(--color-good)" : "var(--color-accent)"
+                  }
                   strokeWidth={2}
                   strokeDasharray="5 6"
                   fill="none"
@@ -512,21 +694,34 @@ export default function FlowStudio() {
               )}
             </svg>
 
+            {marquee && (
+              <div
+                className="absolute rounded border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]"
+                style={{
+                  left: marquee.x,
+                  top: marquee.y,
+                  width: marquee.w,
+                  height: marquee.h,
+                }}
+              />
+            )}
+
             {nodes.map((n) => (
               <NodeCard
                 key={n.id}
                 n={n}
                 sim={sim.nodes[n.id]}
-                selected={selected === n.id}
+                selected={selection.includes(n.id)}
                 linkSource={linkFrom === n.id}
                 linkTarget={linkMode && !!linkFrom && linkFrom !== n.id}
+                wireSource={wireFrom === n.id}
+                wireTarget={wireHover === n.id}
                 onPointerDown={onNodePointerDown}
-                onSelect={setSelected}
+                onPortDown={onPortDown}
               />
             ))}
           </div>
 
-          {/* bottleneck banner */}
           {sim.worst && (
             <div className="fade-in pointer-events-none absolute left-1/2 top-4 -translate-x-1/2">
               <div className="flex items-center gap-2 rounded-xl border border-[var(--color-bad-border)] bg-[var(--color-bad-soft)] px-4 py-2 backdrop-blur">
@@ -551,7 +746,6 @@ export default function FlowStudio() {
             </div>
           )}
 
-          {/* bottom status strip */}
           <div className="mono pointer-events-none absolute bottom-0 left-0 right-0 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--color-line)] bg-[var(--color-strip)] px-4 py-1.5 text-[9.5px] text-[var(--color-muted)] backdrop-blur">
             <span className="text-[var(--color-accent)]">SIMULATED WORKLOAD</span>
             <span>· real-world capacity numbers</span>

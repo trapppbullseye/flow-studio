@@ -9,7 +9,12 @@ graph. Whatever runs past its capacity lights up red as the bottleneck.
 ## What it does
 
 - **Drag-and-drop canvas** — pan, zoom, drag nodes.
-- **Link mode** — click 🔗 then two nodes to wire them (read / write / async).
+- **Drag-to-connect** — grab the ● port on a node's right edge and drop it on
+  another node to wire them. Repeat to fan one node out to as many targets as
+  you like; drop direction sets the arrow.
+- **Multi-select** — shift-click to add nodes, or shift-drag a box around a
+  group. Drag any selected node to move the whole group together.
+- **Connection modes** — each link is tagged read / write / async.
 - **Live traffic simulation** — a fixed-point propagation pass pushes requests
   per second through the graph. Caches and CDNs absorb their share; the rest
   flows downstream.
