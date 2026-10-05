@@ -933,6 +933,27 @@ export interface Sim {
 
 export const usersToRps = (users: number) => users / 10;
 
+/**
+ * Real-world provisioning: capacity is always a whole number of catalog-sized
+ * instances, and never below one instance. So a database (5k rps each) under
+ * 75k rps becomes 19×5,000 = 95,000 rps — not some arbitrary number below the
+ * default it ships with.
+ */
+export function provisionCapacity(kind: NodeKind, inflow: number): number {
+  const natural = CATALOG[kind].capacity;
+  if (natural === Infinity || natural <= 0) return natural;
+  const needed = inflow / natural;
+  const units = Math.max(1, Math.ceil(needed * 1.25));
+  return units * natural;
+}
+
+/** how many catalog-sized instances a capacity represents */
+export const instancedUnits = (kind: NodeKind, capacity: number) => {
+  const natural = CATALOG[kind].capacity;
+  if (natural === Infinity || natural <= 0) return 1;
+  return capacity / natural;
+};
+
 export const weightOf = (e: Edge) => (e.weight ?? 1);
 
 /**
@@ -1202,7 +1223,7 @@ export function smartStack(users: number): {
   const sized = nodes.map((n) => {
     const sn = s.nodes[n.id];
     if (!sn || sn.capacity === Infinity || !sn.overloaded) return n;
-    return { ...n, capacity: Math.ceil((sn.inflow * 1.3) / 100) * 100 };
+    return { ...n, capacity: provisionCapacity(n.kind, sn.inflow) };
   });
   return { nodes: sized, edges };
 }
@@ -1447,4 +1468,21 @@ export const CHALLENGES: Challenge[] = [
     edges: SCENARIOS[5].edges,
     requireNoSpof: false,
   },
+];
+
+/* ============================================================
+   SCALE PRESETS — the same design at four real-world sizes
+   ============================================================ */
+export interface ScalePreset {
+  id: string;
+  name: string;
+  blurb: string;
+  users: number;
+}
+
+export const SCALE_PRESETS: ScalePreset[] = [
+  { id: "side", name: "Side project", blurb: "a few hundred users", users: 2000 },
+  { id: "startup", name: "Growing startup", blurb: "tens of thousands", users: 50000 },
+  { id: "scale", name: "Scaling fast", blurb: "a quarter million", users: 250000 },
+  { id: "mega", name: "Hyperscale", blurb: "millions of users", users: 2000000 },
 ];

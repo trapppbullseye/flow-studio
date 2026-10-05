@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CATALOG,
   CHALLENGES,
+  SCALE_PRESETS,
   SCENARIOS,
   addSecondRegion,
   billOf,
@@ -12,6 +13,7 @@ import {
   fmtMoney,
   fmtUsers,
   newId,
+  provisionCapacity,
   shortName,
   simulate,
   smartStack,
@@ -19,14 +21,22 @@ import {
   type Edge,
   type FlowNode,
   type NodeKind,
+  type ScalePreset,
 } from "@/lib/design";
 import { analyzeLatency, findSpofs, fmtMs } from "@/lib/analysis";
+import { explainDesign } from "@/lib/explain";
+import { toDockerCompose, toTerraform } from "@/lib/iac";
 import {
+  deleteSaved,
   designToSVG,
   download,
+  listSaved,
+  loadSavedDesign,
   readSharedDesign,
+  saveDesign,
   shareUrl,
   svgToPng,
+  type SavedDesign,
 } from "@/lib/share";
 import NodeCard, { NODE_H, NODE_W, type View } from "./NodeCard";
 import Inspector, { Palette } from "./Inspector";
@@ -45,6 +55,33 @@ const hitTest = (p: { x: number; y: number }, ns: FlowNode[]) => {
   }
   return null;
 };
+
+const TOUR: { title: string; body: string }[] = [
+  {
+    title: "Welcome to Flow Studio",
+    body: "This is a system design. Users flow through components, and each component forwards traffic downstream. Red means a component is over capacity — that's your bottleneck.",
+  },
+  {
+    title: "Wire things together",
+    body: "Drag the ● port on a node's right edge onto another node to connect them. Drag a node to move it. Shift-click or shift-drag a box to select several and move them as a group.",
+  },
+  {
+    title: "Crank the load",
+    body: "The users slider top-right is the stress test. Push it up and watch which component turns red first. Use the real-world presets to see the same design at four different sizes.",
+  },
+  {
+    title: "Read the numbers",
+    body: "$ cost and ⏱ latency change what every node shows: monthly dollars or p99 milliseconds. The sidebar totals the bill, the end-to-end latency, and any single points of failure.",
+  },
+  {
+    title: "Break it on purpose",
+    body: "💥 chaos kills a component so you can watch the fallout. 🎬 watch the fix heals the system one bottleneck at a time. ⚔ challenges give you a budget and a goal to hit. 🧹 clear all wipes the canvas.",
+  },
+  {
+    title: "Clean up",
+    body: "↩ undo (⌘Z) and ↪ redo (⌘⇧Z) step through your changes. Delete key removes whatever's selected. 💾 save keeps a design in this browser; 🔗 share copies a link; ⬇ exports SVG, PNG, Terraform or docker-compose.",
+  },
+];
 
 export default function FlowStudio() {
   const [scenarioId, setScenarioId] = useState(SCENARIOS[0].id);
@@ -67,6 +104,13 @@ export default function FlowStudio() {
   const [replaying, setReplaying] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [showExplain, setShowExplain] = useState(false);
+  const [showSaved, setShowSaved] = useState(false);
+  const [saved, setSaved] = useState<SavedDesign[]>([]);
+  const [savedName, setSavedName] = useState("");
+  const [tourStep, setTourStep] = useState<number | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   const [linkMode, setLinkMode] = useState(false);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
@@ -265,7 +309,7 @@ export default function FlowStudio() {
       prev.map((n) => {
         const sn = sim.nodes[n.id];
         if (!sn || sn.capacity === Infinity || !sn.overloaded) return n;
-        return { ...n, capacity: Math.ceil((sn.inflow * 1.3) / 100) * 100 };
+        return { ...n, capacity: provisionCapacity(n.kind, sn.inflow) };
       }),
     );
     flash(`scaled ${over.length} component${over.length > 1 ? "s" : ""}`);
@@ -355,8 +399,10 @@ export default function FlowStudio() {
           n.id === worst.id
             ? {
                 ...n,
-                capacity:
-                  Math.ceil((curSim.nodes[worst.id].inflow * 1.3) / 100) * 100,
+                capacity: provisionCapacity(
+                  worst.kind,
+                  curSim.nodes[worst.id].inflow,
+                ),
               }
             : n,
         ),
@@ -607,15 +653,30 @@ export default function FlowStudio() {
       ? toCanvas(r.left + r.width / 2, r.top + r.height / 2)
       : { x: 300, y: 200 };
     const id = newId(kind);
-    setNodes((prev) => [
-      ...prev,
-      {
-        id,
-        kind,
-        x: c.x - NODE_W / 2 + Math.random() * 40,
-        y: c.y - NODE_H / 2 + Math.random() * 40,
-      },
-    ]);
+
+    // nudge right/down until the new node doesn't land on top of an existing one
+    const cx = c.x - NODE_W / 2;
+    const cy = c.y - NODE_H / 2;
+    const pad = 14;
+    const hits = (px: number, py: number) =>
+      nodes.some(
+        (n) =>
+          px < n.x + NODE_W + pad &&
+          px + NODE_W + pad > n.x &&
+          py < n.y + NODE_H + pad &&
+          py + NODE_H + pad > n.y,
+      );
+    let x = cx;
+    let y = cy;
+    for (let guard = 0; guard < 60 && hits(x, y); guard++) {
+      x += NODE_W + pad;
+      if (guard % 4 === 3) {
+        x = cx;
+        y += NODE_H + pad;
+      }
+    }
+
+    setNodes((prev) => [...prev, { id, kind, x, y }]);
     setSelection([id]);
   };
 
@@ -632,6 +693,197 @@ export default function FlowStudio() {
     setEdges((prev) => prev.map((e) => (e.id === id ? { ...e, mode } : e)));
 
   const fit = () => fitTo(nodes);
+
+  /* ---------------- undo / redo ---------------- */
+  const past = useRef<{ nodes: FlowNode[]; edges: Edge[]; dead: string[] }[]>([]);
+  const future = useRef<{ nodes: FlowNode[]; edges: Edge[]; dead: string[] }[]>(
+    [],
+  );
+  const lastSnap = useRef({ nodes, edges, dead });
+  const pendingSnap = useRef<{
+    nodes: FlowNode[];
+    edges: Edge[];
+    dead: string[];
+  } | null>(null);
+  const histTimer = useRef<number | null>(null);
+
+  // capture one history entry per settled burst of changes (so a drag is one step)
+  useEffect(() => {
+    const prev = lastSnap.current;
+    if (prev.nodes === nodes && prev.edges === edges && prev.dead === dead) return;
+    lastSnap.current = { nodes, edges, dead };
+    if (!pendingSnap.current) pendingSnap.current = prev;
+    if (histTimer.current) window.clearTimeout(histTimer.current);
+    histTimer.current = window.setTimeout(() => {
+      if (!pendingSnap.current) return;
+      past.current.push(pendingSnap.current);
+      if (past.current.length > 80) past.current.shift();
+      future.current = [];
+      pendingSnap.current = null;
+      setCanUndo(true);
+      setCanRedo(false);
+    }, 340);
+  }, [nodes, edges, dead]);
+
+  const undo = useCallback(() => {
+    const p = past.current.pop();
+    if (!p) return;
+    future.current.push({ nodes, edges, dead });
+    if (histTimer.current) window.clearTimeout(histTimer.current);
+    pendingSnap.current = null;
+    lastSnap.current = p;
+    setNodes(p.nodes);
+    setEdges(p.edges);
+    setDead(p.dead);
+    setSelection([]);
+    setCanRedo(true);
+    setCanUndo(past.current.length > 0);
+  }, [nodes, edges, dead]);
+
+  const redo = useCallback(() => {
+    const f = future.current.pop();
+    if (!f) return;
+    past.current.push({ nodes, edges, dead });
+    if (histTimer.current) window.clearTimeout(histTimer.current);
+    pendingSnap.current = null;
+    lastSnap.current = f;
+    setNodes(f.nodes);
+    setEdges(f.edges);
+    setDead(f.dead);
+    setSelection([]);
+    setCanUndo(true);
+    setCanRedo(future.current.length > 0);
+  }, [nodes, edges, dead]);
+
+  /* ---------------- library / presets / exports ---------------- */
+  const applyPreset = useCallback(
+    (p: ScalePreset) => {
+      setUsers(p.users);
+      flash(`${p.name} — ${p.blurb}`);
+      window.setTimeout(() => record(p.name), 260);
+    },
+    [flash, record],
+  );
+
+  const doSave = useCallback(() => {
+    const name = savedName.trim() || "untitled";
+    setSaved(saveDesign(name, { nodes, edges, users, dead }));
+    setSavedName("");
+    flash(`saved “${name}”`);
+  }, [savedName, nodes, edges, users, dead, flash]);
+
+  const doLoad = useCallback(
+    (d: SavedDesign) => {
+      const st = loadSavedDesign(d);
+      if (!st) {
+        flash("could not load that design");
+        return;
+      }
+      setNodes(st.nodes);
+      setEdges(st.edges);
+      setUsers(st.users);
+      setDead(st.dead);
+      setSelection([]);
+      setChallenge(null);
+      setScenarioId("");
+      setMeta({
+        index: "💾",
+        title: d.name.toUpperCase(),
+        blurb: "Loaded from your library. Saved in this browser only.",
+      });
+      fitTo(st.nodes);
+      flash(`loaded “${d.name}”`);
+    },
+    [fitTo, flash],
+  );
+
+  const doDeleteSaved = useCallback((id: string) => {
+    setSaved(deleteSaved(id));
+  }, []);
+
+  const exportCompose = useCallback(() => {
+    download("docker-compose.yml", toDockerCompose(nodes, edges, sim), "text/yaml");
+    flash("docker-compose.yml downloaded");
+  }, [nodes, edges, sim, flash]);
+
+  const exportTerraform = useCallback(() => {
+    download("main.tf", toTerraform(nodes, edges, sim), "text/plain");
+    flash("main.tf downloaded");
+  }, [nodes, edges, sim, flash]);
+
+  const narration = useMemo(
+    () =>
+      explainDesign({
+        nodes,
+        edges,
+        users,
+        sim,
+        total: bill.total,
+        lat,
+        spofs,
+        dead,
+        topCost: bill.rows
+          .slice(0, 5)
+          .map((r) => ({ name: r.name, total: r.cost.total })),
+      }),
+    [nodes, edges, users, sim, bill, lat, spofs, dead],
+  );
+
+  /* ---------------- keyboard shortcuts ---------------- */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable);
+      const mod = e.metaKey || e.ctrlKey;
+
+      if (mod && e.key.toLowerCase() === "z" && !typing) {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (typing) return;
+
+      if (e.key === "Escape") {
+        setSelection([]);
+        setLinkFrom(null);
+        setWireFrom(null);
+        setLinkMode(false);
+        return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && selection.length) {
+        e.preventDefault();
+        deleteNodes(selection);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo, selection]);
+
+  /* ---------------- first-run tour + saved library ---------------- */
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setSaved(listSaved());
+    try {
+      if (!window.localStorage.getItem("flowstudio.toured")) setTourStep(0);
+    } catch {
+      /* private mode — skip the tour */
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  const closeTour = useCallback(() => {
+    setTourStep(null);
+    try {
+      window.localStorage.setItem("flowstudio.toured", "1");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   /* ---------------- derived ---------------- */
   const previewId = wireFrom ?? linkFrom;
@@ -670,7 +922,7 @@ export default function FlowStudio() {
   const slowest = lat.slowestId ? nodes.find((n) => n.id === lat.slowestId) : null;
 
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden">
+    <div className="relative flex h-screen w-full flex-col overflow-hidden">
       {/* ============ TOP BAR ============ */}
       <header className="z-20 flex flex-col gap-2 border-b border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-2.5">
         <div className="flex flex-wrap items-center gap-3">
@@ -703,6 +955,13 @@ export default function FlowStudio() {
             <Readout label="p99" value={fmtMs(lat.endToEnd)} tone="accent" />
             <Readout label="$/mo" value={fmtMoney(bill.total)} tone="good" />
             <button
+              onClick={() => setTourStep(0)}
+              title="how this works"
+              className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5 text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              ? help
+            </button>
+            <button
               onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
               title="toggle theme"
               className="rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5 text-[var(--color-muted)] hover:text-[var(--color-ink)]"
@@ -729,6 +988,15 @@ export default function FlowStudio() {
               </button>
             ))}
           </div>
+
+          <span className="mx-1 h-4 w-px bg-[var(--color-line)]" />
+          <Btn onClick={undo} disabled={!canUndo} title="undo (⌘Z)">
+            ↩ undo
+          </Btn>
+          <Btn onClick={redo} disabled={!canRedo} title="redo (⌘⇧Z)">
+            ↪ redo
+          </Btn>
+          <span className="mx-1 h-4 w-px bg-[var(--color-line)]" />
 
           <Btn onClick={buildSmartStack} tone="accent" title="build a scalable default stack">
             ⚡ smart stack
@@ -760,6 +1028,9 @@ export default function FlowStudio() {
           <Btn onClick={() => setShowChart((v) => !v)} active={showChart} title="cost vs latency chart">
             📊 chart
           </Btn>
+          <Btn onClick={() => setShowExplain((v) => !v)} active={showExplain} title="plain-English read of this design">
+            📖 explain
+          </Btn>
           <Btn onClick={doShare} title="copy a shareable link to this design">
             🔗 share
           </Btn>
@@ -768,6 +1039,24 @@ export default function FlowStudio() {
           </Btn>
           <Btn onClick={exportPng} title="download the diagram as PNG">
             ⬇ png
+          </Btn>
+          <Btn onClick={exportTerraform} title="download Terraform for this design">
+            ⬇ tf
+          </Btn>
+          <Btn onClick={exportCompose} title="download docker-compose.yml for this design">
+            ⬇ compose
+          </Btn>
+
+          <span className="mx-1 h-4 w-px bg-[var(--color-line)]" />
+          <Btn onClick={doSave} tone="good" title="save this design to your browser library">
+            💾 save
+          </Btn>
+          <Btn
+            onClick={() => setShowSaved((v) => !v)}
+            active={showSaved}
+            title="your saved designs"
+          >
+            📚 designs{saved.length ? ` (${saved.length})` : ""}
           </Btn>
           <Btn onClick={fit} title="zoom to fit">
             fit
@@ -842,6 +1131,26 @@ export default function FlowStudio() {
                 >
                   <span className="font-bold text-[var(--color-accent)]">{s.index}</span>
                   <span className="truncate">{s.title}</span>
+                </button>
+              ))}
+            </div>
+          </Section>
+
+          <Section title="real-world scale">
+            <div className="grid grid-cols-2 gap-1.5">
+              {SCALE_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => applyPreset(p)}
+                  title={`${p.name} — ${p.blurb}`}
+                  className={`mono rounded-lg border px-2 py-1.5 text-left text-[9.5px] transition ${
+                    users === p.users
+                      ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] text-[var(--color-ink)]"
+                      : "border-[var(--color-line)] bg-[var(--color-well)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  }`}
+                >
+                  <div className="truncate font-bold">{p.name}</div>
+                  <div className="truncate text-[8.5px] opacity-75">{p.blurb}</div>
                 </button>
               ))}
             </div>
@@ -1016,6 +1325,79 @@ export default function FlowStudio() {
             </Section>
           )}
 
+          {showExplain && (
+            <Section title="📖 explain this design">
+              <div className="panel rounded-xl p-3">
+                <div className="flex flex-col gap-2">
+                  {narration.map((line, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="mono shrink-0 text-[10px] font-bold text-[var(--color-accent)]">
+                        {i + 1}
+                      </span>
+                      <span className="text-[11px] leading-relaxed text-[var(--color-ink)]">
+                        {line}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Section>
+          )}
+
+          {showSaved && (
+            <Section title="📚 your designs">
+              <div className="panel rounded-xl p-3">
+                <div className="mb-2 flex gap-1.5">
+                  <input
+                    value={savedName}
+                    onChange={(e) => setSavedName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") doSave();
+                    }}
+                    placeholder="name this design…"
+                    className="mono min-w-0 flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-[10px] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)]"
+                  />
+                  <button
+                    onClick={doSave}
+                    className="mono shrink-0 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  >
+                    save
+                  </button>
+                </div>
+                {saved.length === 0 ? (
+                  <div className="mono text-[9.5px] leading-relaxed text-[var(--color-muted)]">
+                    Nothing saved yet. Saved designs live in this browser only —
+                    use 🔗 share for a link that works anywhere.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {saved.map((d) => (
+                      <div
+                        key={d.id}
+                        className="mono flex items-center gap-1.5 rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-2 py-1.5 text-[9.5px]"
+                      >
+                        <button
+                          onClick={() => doLoad(d)}
+                          className="min-w-0 flex-1 truncate text-left text-[var(--color-ink)] hover:text-[var(--color-accent)]"
+                          title="load this design"
+                        >
+                          {d.name}
+                        </button>
+                        <button
+                          onClick={() => doDeleteSaved(d.id)}
+                          className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-bad)]"
+                          title="delete"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Section>
+          )}
+
           <Section title="add component">
             <Palette onAdd={addNode} />
           </Section>
@@ -1084,6 +1466,7 @@ export default function FlowStudio() {
           onWheel={onWheel}
           style={{
             cursor: panning ? "grabbing" : linkMode ? "crosshair" : "default",
+            touchAction: "none",
           }}
         >
           <div
@@ -1263,6 +1646,64 @@ export default function FlowStudio() {
           </div>
         </main>
       </div>
+
+      {tourStep !== null && tourStep < TOUR.length && (
+        <div className="absolute inset-0 z-40 grid place-items-center bg-[#0b112080] backdrop-blur-sm">
+          <div className="fade-in w-[440px] max-w-[92vw] rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5 shadow-2xl">
+            <div className="mono mb-2 flex items-center justify-between text-[9px] uppercase tracking-widest text-[var(--color-accent)]">
+              <span>
+                step {tourStep + 1} / {TOUR.length}
+              </span>
+              <button
+                onClick={closeTour}
+                className="text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+              >
+                skip
+              </button>
+            </div>
+            <div className="text-[16px] font-bold text-[var(--color-ink)]">
+              {TOUR[tourStep].title}
+            </div>
+            <p className="mt-2 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+              {TOUR[tourStep].body}
+            </p>
+            <div className="mt-4 flex items-center justify-between">
+              <div className="flex gap-1.5">
+                {TOUR.map((_, i) => (
+                  <span
+                    key={i}
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{
+                      background:
+                        i === tourStep ? "var(--color-accent)" : "var(--color-line)",
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="flex gap-1.5">
+                {tourStep > 0 && (
+                  <button
+                    onClick={() => setTourStep(Math.max(0, tourStep - 1))}
+                    className="mono rounded-lg border border-[var(--color-line)] bg-[var(--color-well)] px-3 py-1.5 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  >
+                    back
+                  </button>
+                )}
+                <button
+                  onClick={() =>
+                    tourStep + 1 >= TOUR.length
+                      ? closeTour()
+                      : setTourStep(tourStep + 1)
+                  }
+                  className="mono rounded-lg border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] px-3 py-1.5 text-[10px] text-[var(--color-accent)]"
+                >
+                  {tourStep + 1 >= TOUR.length ? "got it" : "next"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

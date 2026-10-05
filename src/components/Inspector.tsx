@@ -6,6 +6,7 @@ import {
   PALETTE_GROUPS,
   fmt,
   fmtMoney,
+  instancedUnits,
   shortName,
   type NodeKind,
   type NodeCost,
@@ -52,6 +53,15 @@ export default function Inspector({
   const e = sim.entry;
   const rawPct = sim.capacity === Infinity ? 0 : Math.round(sim.load * 100);
   const barPct = Math.min(100, rawPct);
+
+  // slider range must always contain the current value, or a controlled range
+  // input renders pinned/frozen and dragging appears to do nothing
+  const natural = e.capacity;
+  const scalable = sim.capacity !== Infinity && natural !== Infinity && natural > 0;
+  const units = scalable ? instancedUnits(e.kind, sim.capacity) : 1;
+  const lo = scalable ? Math.max(1, Math.min(natural, sim.capacity)) : 0;
+  const hi = scalable ? Math.max(natural * 8, sim.capacity * 2) : 1;
+  const step = scalable ? Math.max(1, Math.round(natural / 10)) : 1;
 
   return (
     <div className="panel fade-in rounded-xl p-4">
@@ -125,21 +135,33 @@ export default function Inspector({
         </div>
       )}
 
-      {sim.capacity !== Infinity && (
+      {scalable && (
         <div className="mb-3">
           <div className="mono mb-1 flex justify-between text-[9px] uppercase text-[var(--color-muted)]">
             <span>tune capacity</span>
-            <span>{fmt(sim.capacity)} rps</span>
+            <span className="text-[var(--color-ink)]">
+              {fmt(sim.capacity)} rps · ×
+              {units >= 10 ? Math.round(units) : units.toFixed(2)}
+            </span>
           </div>
           <input
             type="range"
-            min={Math.max(100, Math.round(e.capacity * 0.25))}
-            max={Math.round(e.capacity * 4)}
-            step={100}
-            value={sim.capacity}
+            min={lo}
+            max={hi}
+            step={step}
+            value={Math.min(hi, Math.max(lo, sim.capacity))}
             onChange={(ev) => onCapacity(Number(ev.target.value))}
             className="w-full"
           />
+          <div className="mono mt-1 flex justify-between text-[8.5px] text-[var(--color-muted)]">
+            <span>1× = {fmt(natural)} rps</span>
+            <button
+              onClick={() => onCapacity(natural)}
+              className="hover:text-[var(--color-ink)]"
+            >
+              reset to 1×
+            </button>
+          </div>
         </div>
       )}
 

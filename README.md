@@ -31,9 +31,30 @@ find out what it costs, how slow it is, and whether it survives losing a node.
 | **🎬 Watch the fix** | Time-lapse: revives everything, then sizes each bottleneck clear of its load, one at a time. |
 | **📊 Cost vs latency chart** | Records each design you build as a point. Cheapest sits bottom-left, fastest top-left — the sweet spot is low and left. |
 | **🔗 Shareable designs** | Encodes the whole graph into a URL. Send it to anyone; it loads exactly as you built it. |
-| **🖼 Export** | Download the canvas as a standalone SVG or a 2× PNG, for slides, docs or a portfolio. |
+| **🖼 Export** | Download the canvas as a standalone SVG or a 2× PNG — or export the design as **Terraform** (`main.tf`) or a runnable **`docker-compose.yml`** with the right images and `depends_on` wiring. |
 | **⚔️ Challenge mode** | Three graded puzzles — make it hold, stay under budget, and (optionally) survive any single failure. |
 | **🌍 Multi-region** | Clones the stack into a second region behind a region router that splits traffic 50/50. Watch p99 collapse and the bill climb. |
+
+## Quality of life
+
+| Feature | What it does |
+| --- | --- |
+| **↩ Undo / redo** | `⌘Z` / `⌘⇧Z` (or the toolbar buttons) step through every change. A drag counts as one step, not fifty. |
+| **💾 Saved designs** | A small library in `localStorage` — name a design, reload it later. Per-browser; use 🔗 share for a portable link. |
+| **📖 Explain this design** | Writes a plain-English read of what you built: traffic, the bottleneck, p99, the bill and its biggest line item, the single points of failure, and the cheapest next move. |
+| **📐 Real-world scale presets** | Side project → Growing startup → Scaling fast → Hyperscale. One click, and you watch the *same* design buckle at four different sizes. |
+| **🎓 Guided tour** | Six steps on first visit (and behind `? help`) covering wiring, load, the numbers, and the failure tools. |
+| **⌨️ Keyboard shortcuts** | `⌘Z` undo · `⌘⇧Z` redo · `Delete`/`Backspace` remove selection · `Esc` deselect. |
+| **📱 Touch** | The canvas takes touch input, so drag-to-connect and panning work on a phone or tablet. |
+
+## Capacity is always real
+
+Auto-scale never invents a number. Capacity is always a whole number of
+catalog-sized instances and never below the default that component ships with —
+a database at 75k req/s becomes **19 × 5,000 = 95,000 rps**, not some arbitrary
+figure below the real product. The Inspector shows the current multiplier (`×19`)
+and lets you dial it in, with a **reset to 1×**. Same rule drives the cost model
+and both IaC exports, so the diagram, the bill and the generated code agree.
 
 ## Components (51)
 
@@ -77,7 +98,9 @@ flips the entire palette.
 
 Source layout:
 
-- `src/lib/design.ts` — catalog, pricing, latency constants, simulator, scenarios, challenges
+- `src/lib/design.ts` — catalog, pricing, latency constants, simulator, scenarios, challenges, presets
 - `src/lib/analysis.ts` — latency propagation and single-point-of-failure detection
-- `src/lib/share.ts` — URL encoding/decoding and SVG/PNG export
+- `src/lib/explain.ts` — the plain-English design narrator
+- `src/lib/iac.ts` — Terraform and docker-compose generation
+- `src/lib/share.ts` — URL encoding/decoding, saved-design library, SVG/PNG export
 - `src/components/FlowStudio.tsx` — the studio shell and all interactions

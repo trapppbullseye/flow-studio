@@ -97,6 +97,60 @@ export function readSharedDesign(): DesignState | null {
 }
 
 /* ============================================================
+   SAVED DESIGNS — a small local library in localStorage
+   ============================================================ */
+const SAVED_KEY = "flowstudio.designs";
+
+export interface SavedDesign {
+  id: string;
+  name: string;
+  at: number;
+  payload: string;
+}
+
+export function listSaved(): SavedDesign[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(SAVED_KEY);
+    const arr = raw ? (JSON.parse(raw) as SavedDesign[]) : [];
+    return arr.sort((a, b) => b.at - a.at);
+  } catch {
+    return [];
+  }
+}
+
+function writeSaved(arr: SavedDesign[]) {
+  try {
+    window.localStorage.setItem(SAVED_KEY, JSON.stringify(arr));
+  } catch {
+    /* storage full or blocked — ignore */
+  }
+}
+
+export function saveDesign(name: string, s: DesignState): SavedDesign[] {
+  const arr = listSaved();
+  const entry: SavedDesign = {
+    id: `ds-${Date.now().toString(36)}`,
+    name: name.trim() || "untitled",
+    at: Date.now(),
+    payload: encodeDesign(s),
+  };
+  const next = [entry, ...arr].slice(0, 40);
+  writeSaved(next);
+  return next.sort((a, b) => b.at - a.at);
+}
+
+export function deleteSaved(id: string): SavedDesign[] {
+  const next = listSaved().filter((d) => d.id !== id);
+  writeSaved(next);
+  return next;
+}
+
+export function loadSavedDesign(d: SavedDesign): DesignState | null {
+  return decodeDesign(d.payload);
+}
+
+/* ============================================================
    EXPORT — render the canvas to a standalone SVG (and PNG)
    ============================================================ */
 const NODE_W = 172;
